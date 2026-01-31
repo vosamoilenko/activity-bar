@@ -39,8 +39,23 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         for project in projects.prefix(10) {
             // Pull Requests (filter by current user as creator)
             if let prs = try? await fetchPullRequests(organization: organization, project: project.name, token: token, minDate: minDate, maxDate: maxDate, creatorId: currentUser.id) {
+                // Fetch linked work items for each PR
+                var prWorkItemsMap: [Int: [AzureWorkItem]] = [:]
                 for pr in prs {
-                    activities.append(normalizePullRequest(pr, accountId: account.id, organization: organization))
+                    if let workItems = try? await fetchPRLinkedWorkItems(
+                        organization: organization,
+                        project: project.name,
+                        repositoryId: pr.repository.id,
+                        pullRequestId: pr.pullRequestId,
+                        token: token
+                    ) {
+                        prWorkItemsMap[pr.pullRequestId] = workItems
+                    }
+                }
+
+                for pr in prs {
+                    let linkedWorkItems = prWorkItemsMap[pr.pullRequestId] ?? []
+                    activities.append(normalizePullRequest(pr, accountId: account.id, organization: organization, linkedWorkItems: linkedWorkItems))
                 }
             }
 
@@ -216,12 +231,69 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         return resp.value
     }
 
+    /// Fetch work items linked to a pull request
+    private func fetchPRLinkedWorkItems(organization: String, project: String, repositoryId: String, pullRequestId: Int, token: String) async throws -> [AzureWorkItem] {
+        // First, get the work item references
+        let resp: AzurePRWorkItemsResponse = try await get(
+            organization: organization,
+            project: project,
+            endpoint: "/git/repositories/\(repositoryId)/pullRequests/\(pullRequestId)/workitems",
+            token: token
+        )
+
+        guard !resp.value.isEmpty else { return [] }
+
+        // Fetch work item details in batch
+        let ids = resp.value.map { $0.id }.joined(separator: ",")
+        struct WorkItemsResponse: Decodable { let value: [AzureWorkItem] }
+        let workItemsResp: WorkItemsResponse = try await get(
+            organization: organization,
+            endpoint: "/wit/workitems",
+            token: token,
+            query: [
+                "ids": ids,
+                "fields": "System.Id,System.Title,System.WorkItemType,System.State"
+            ]
+        )
+        return workItemsResp.value
+    }
+
     // MARK: - Normalization
 
-    private func normalizePullRequest(_ pr: AzurePullRequest, accountId: String, organization: String) -> UnifiedActivity {
+    private func normalizePullRequest(_ pr: AzurePullRequest, accountId: String, organization: String, linkedWorkItems: [AzureWorkItem] = []) -> UnifiedActivity {
         let tsStr = pr.closedDate ?? pr.creationDate
         let timestamp = DateFormatting.parseISO8601(tsStr) ?? Date()
         let url = URL(string: "https://dev.azure.com/\(organization)/\(pr.repository.project.name)/_git/\(pr.repository.name)/pullrequest/\(pr.pullRequestId)")
+
+        // Extract branch name from refs/heads/feature/AB#123 format
+        let branchName = pr.sourceRefName?.replacingOccurrences(of: "refs/heads/", with: "")
+
+        // Build API-linked tickets from work items
+        var apiLinkedTickets: [LinkedTicket] = []
+        for workItem in linkedWorkItems {
+            let workItemTitle = workItem.fields.string(for: "System.Title")
+            let workItemType = workItem.fields.string(for: "System.WorkItemType") ?? "Work Item"
+            let workItemUrl = URL(string: "https://dev.azure.com/\(organization)/\(pr.repository.project.name)/_workitems/edit/\(workItem.id)")
+            apiLinkedTickets.append(LinkedTicket(
+                system: .azureBoards,
+                key: "AB#\(workItem.id)",
+                title: "[\(workItemType)] \(workItemTitle ?? "")",
+                url: workItemUrl,
+                source: .apiLink
+            ))
+        }
+
+        // Extract tickets from text sources
+        let extractedTickets = TicketExtractor.extractFromActivity(
+            branchName: branchName,
+            title: pr.title,
+            description: pr.description,
+            defaultSystem: .azureBoards
+        )
+
+        // Merge API-linked and extracted tickets
+        let mergedTickets = TicketExtractor.merge(extracted: extractedTickets, apiLinked: apiLinkedTickets)
+        let linkedTickets: [LinkedTicket]? = mergedTickets.isEmpty ? nil : mergedTickets
 
         return UnifiedActivity(
             id: "azure-devops:\(accountId):pr-\(pr.pullRequestId)",
@@ -232,7 +304,11 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             timestamp: timestamp,
             title: pr.title,
             participants: [pr.createdBy.displayName],
-            url: url
+            url: url,
+            sourceRef: branchName,
+            targetRef: pr.targetRefName?.replacingOccurrences(of: "refs/heads/", with: ""),
+            projectName: pr.repository.name,
+            linkedTickets: linkedTickets
         )
     }
 
@@ -298,11 +374,25 @@ struct AzureRepo: Decodable, Sendable {
 struct AzurePullRequest: Decodable, Sendable {
     let pullRequestId: Int
     let title: String
+    let description: String?
+    let sourceRefName: String?  // refs/heads/feature/AB#123
+    let targetRefName: String?
     let creationDate: String
     let closedDate: String?
     let status: String
     let createdBy: AzureUser
     let repository: AzureRepository
+}
+
+/// Work item reference from PR work items API
+struct AzureWorkItemRef: Decodable, Sendable {
+    let id: String
+    let url: String
+}
+
+/// Response wrapper for PR work items
+struct AzurePRWorkItemsResponse: Decodable, Sendable {
+    let value: [AzureWorkItemRef]
 }
 
 struct AzureUser: Decodable, Sendable {

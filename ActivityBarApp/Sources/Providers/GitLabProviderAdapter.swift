@@ -63,14 +63,19 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             }
         }
 
-        // Fetch MR details for MR events to get reviewer/assignee avatars
+        // Fetch MR details for MR events to get reviewer/assignee avatars and related issues
         var mrDetailsMap: [String: GitLabMergeRequest] = [:]  // key: "projectId:mrIid"
+        var relatedIssuesMap: [String: [GitLabRelatedIssue]] = [:]  // key: "projectId:mrIid"
         for event in events where event.targetType == "MergeRequest" {
             if let projectId = event.projectId, let mrIid = event.targetIid {
                 let key = "\(projectId):\(mrIid)"
                 if mrDetailsMap[key] == nil {
                     if let mr = try? await fetchMergeRequest(baseURL: baseURL, token: token, authMethod: account.authMethod, projectId: projectId, mrIid: mrIid) {
                         mrDetailsMap[key] = mr
+                    }
+                    // Fetch related issues for this MR
+                    if let issues = try? await fetchRelatedIssues(baseURL: baseURL, token: token, authMethod: account.authMethod, projectId: projectId, mrIid: mrIid) {
+                        relatedIssuesMap[key] = issues
                     }
                 }
             }
@@ -91,7 +96,7 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         var activities: [UnifiedActivity] = []
         var skippedEvents: [String] = []
         for event in events {
-            if let activity = normalizeEvent(event, accountId: account.id, baseURL: baseURL, projectInfoMap: projectInfoMap, mrDetailsMap: mrDetailsMap, authorAvatarMap: authorAvatarMap) {
+            if let activity = normalizeEvent(event, accountId: account.id, baseURL: baseURL, projectInfoMap: projectInfoMap, mrDetailsMap: mrDetailsMap, relatedIssuesMap: relatedIssuesMap, authorAvatarMap: authorAvatarMap) {
                 activities.append(activity)
             } else {
                 skippedEvents.append("\(event.actionName):\(event.targetType ?? "nil")")
@@ -213,6 +218,21 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         return try decoder.decode(GitLabUser.self, from: data)
     }
 
+    /// Fetch related issues for a merge request
+    private func fetchRelatedIssues(baseURL: String, token: String, authMethod: AuthMethod, projectId: Int, mrIid: Int) async throws -> [GitLabRelatedIssue] {
+        let request = try RequestBuilder.buildGitLabRequest(
+            baseURL: baseURL,
+            path: "/projects/\(projectId)/merge_requests/\(mrIid)/related_issues",
+            token: token,
+            authMethod: authMethod
+        )
+
+        let data = try await httpClient.executeRequest(request)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode([GitLabRelatedIssue].self, from: data)
+    }
+
     // MARK: - Event Type Mapping
 
     /// Map GitLab event to ActivityType
@@ -317,6 +337,7 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         baseURL: String,
         projectInfoMap: [Int: (path: String, name: String)],
         mrDetailsMap: [String: GitLabMergeRequest] = [:],
+        relatedIssuesMap: [String: [GitLabRelatedIssue]] = [:],
         authorAvatarMap: [Int: URL] = [:]
     ) -> UnifiedActivity? {
         guard let activityType = mapEventToActivityType(event) else {
@@ -327,11 +348,19 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         let url = buildEventURL(baseURL: baseURL, event: event, projectPath: projectInfo?.path)
         let projectName = projectInfo?.name
 
-        // Get MR details for reviewer avatars (if this is an MR event)
+        // Get MR details for reviewer avatars and ticket extraction (if this is an MR event)
         var reviewers: [Participant]?
+        var linkedTickets: [LinkedTicket]?
+        var mrSourceBranch: String?
+        var mrDescription: String?
+
         if event.targetType == "MergeRequest", let projectId = event.projectId, let mrIid = event.targetIid {
             let mrKey = "\(projectId):\(mrIid)"
             if let mr = mrDetailsMap[mrKey] {
+                // Store MR details for ticket extraction
+                mrSourceBranch = mr.sourceBranch
+                mrDescription = mr.description
+
                 // Combine reviewers and assignees, avoiding duplicates
                 var participantSet = Set<String>()
                 var participants: [Participant] = []
@@ -362,6 +391,34 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
                     reviewers = participants
                 }
             }
+
+            // Build linked tickets from API-linked issues
+            var apiLinkedTickets: [LinkedTicket] = []
+            if let relatedIssues = relatedIssuesMap[mrKey] {
+                for issue in relatedIssues {
+                    apiLinkedTickets.append(LinkedTicket(
+                        system: .gitlabIssue,
+                        key: "#\(issue.iid)",
+                        title: issue.title,
+                        url: URL(string: issue.webUrl),
+                        source: .apiLink
+                    ))
+                }
+            }
+
+            // Extract tickets from text sources
+            let extractedTickets = TicketExtractor.extractFromActivity(
+                branchName: mrSourceBranch,
+                title: event.targetTitle,
+                description: mrDescription,
+                defaultSystem: .gitlabIssue
+            )
+
+            // Merge API-linked and extracted tickets
+            let mergedTickets = TicketExtractor.merge(extracted: extractedTickets, apiLinked: apiLinkedTickets)
+            if !mergedTickets.isEmpty {
+                linkedTickets = mergedTickets
+            }
         }
 
         // Build title based on event type
@@ -381,6 +438,12 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             }
             sourceRef = pushData.ref  // Branch name for grouping
             commitSHA = pushData.commitTo  // Actual commit SHA
+
+            // Extract tickets from branch name for commits
+            let commitTickets = TicketExtractor.extract(from: pushData.ref, source: .branchName, defaultSystem: .gitlabIssue)
+            if !commitTickets.isEmpty {
+                linkedTickets = commitTickets
+            }
         } else if let note = event.note {
             let noteableId = note.noteableIid ?? note.noteableId
             title = "Comment on \(note.noteableType) #\(noteableId)"
@@ -413,7 +476,8 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             authorAvatarURL: authorAvatarURL,
             sourceRef: sourceRef,
             projectName: projectName,
-            reviewers: reviewers
+            reviewers: reviewers,
+            linkedTickets: linkedTickets
         )
     }
 }
@@ -478,7 +542,19 @@ struct GitLabMergeRequest: Codable, Sendable {
     let id: Int
     let iid: Int
     let title: String
+    let description: String?
+    let sourceBranch: String?
+    let targetBranch: String?
     let author: GitLabUser?
     let assignees: [GitLabUser]?
     let reviewers: [GitLabUser]?
+}
+
+/// GitLab related issue (from MR related issues API)
+struct GitLabRelatedIssue: Codable, Sendable {
+    let id: Int
+    let iid: Int
+    let title: String
+    let webUrl: String
+    let state: String
 }

@@ -55,6 +55,11 @@ struct CommitActivityView: View {
                         .foregroundStyle(MenuHighlightStyle.secondary(isHighlighted))
                         .lineLimit(1)
                 }
+
+                // Linked tickets (if any)
+                if let tickets = activity.linkedTickets, !tickets.isEmpty {
+                    TicketChipsView(tickets: tickets)
+                }
             }
         }
     }

@@ -228,7 +228,9 @@ public final class AppState {
             isEnabled: old.isEnabled,
             enabledEventTypes: old.enabledEventTypes,
             username: old.username,
-            showOnlyMyEvents: old.showOnlyMyEvents
+            showOnlyMyEvents: old.showOnlyMyEvents,
+            showOnlyAcceptedEvents: old.showOnlyAcceptedEvents,
+            hideAllDayEvents: old.hideAllDayEvents
         )
         session.accounts[index] = updated
         persistAccounts()
@@ -238,6 +240,20 @@ public final class AppState {
     public func toggleShowOnlyMyEvents(for accountId: String) {
         guard let index = session.accounts.firstIndex(where: { $0.id == accountId }) else { return }
         session.accounts[index].showOnlyMyEvents.toggle()
+        persistAccounts()
+    }
+
+    /// Toggle "show only accepted events" filter for a Google Calendar account
+    public func toggleShowOnlyAcceptedEvents(for accountId: String) {
+        guard let index = session.accounts.firstIndex(where: { $0.id == accountId }) else { return }
+        session.accounts[index].showOnlyAcceptedEvents.toggle()
+        persistAccounts()
+    }
+
+    /// Toggle "hide all-day events" filter for a Google Calendar account
+    public func toggleHideAllDayEvents(for accountId: String) {
+        guard let index = session.accounts.firstIndex(where: { $0.id == accountId }) else { return }
+        session.accounts[index].hideAllDayEvents.toggle()
         persistAccounts()
     }
 
