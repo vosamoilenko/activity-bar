@@ -1,0 +1,1569 @@
+# Ralph Progress Log
+Started:
+
+## Codebase Patterns
+- Swift Settings AddAccount: Google calendars are selected post-OAuth; preselect primary; require at least one selection
+- Swift Settings validation: Validate required fields before OAuth (e.g., Azure DevOps org + projects)
+- Account model: Optional provider-specific fields (host, organization, projects, calendarIds)
+- AddAccountSheet: Collect provider-specific fields and pass alongside OAuthResult
+- Google Calendar events: prefer start.dateTime; fallback to start.date (YYYY-MM-DD UTC)
+- Google Calendar pagination: follow nextPageToken until nil with safety cap
+- Google APIs: Bearer token in Authorization header; minimal fields in responses
+- Module resolution: Use NodeNext with `.js` extensions in imports even for TypeScript files
+- Test config: vitest with globals=true, environment='node'
+- Package type: ESM ("type": "module" in package.json)
+- Zod validation: Use safeParse for non-throwing validation, parse for throwing
+- Timestamp validation: ISO8601 UTC regex: `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/`
+- Provider modules: Place in providers/{name}/ with types.ts, fetch.ts, index.ts
+- GraphQL queries: Store as template literals in queries.ts, minimal fields only
+- Explicit type annotations in while loops to avoid TS7022 circular inference errors
+- Swift SPM: Use executableTarget for main app, target for library modules
+- Swift menu bar app: Use `NSApp.setActivationPolicy(.accessory)` to hide from Dock
+- Swift MenuBarExtra: Use `.menuBarExtraStyle(.window)` for custom SwiftUI content
+- Swift MenuBarExtra label: Use Image-only in label closure - HStack with Text+Image doesn't render
+- Swift Settings: Use `Settings { }` scene, not WindowGroup for preferences
+- Swift open settings: `NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)`
+- Swift @MainActor init: Avoid default parameters that call @MainActor initializers (use optional + coalesce)
+- Swift @Observable: Use `@State private var` in App struct (not @StateObject)
+- Swift date formatting: Use UTC timezone for heatmap dates to match activity-discovery
+- Swift async init: Use .task modifier on SwiftUI views; Task.detached with @MainActor for delayed work
+- Swift Sendable tests: Use @unchecked Sendable on test helpers tracking mutable state
+- Swift heatmap grid: Use Dictionary(uniqueKeysWithValues:) for O(1) bucket lookup by date
+- Time computation (ACTIVITY-063): Use startOfDay and +1 day for range; estimate repo durations conservatively
+- Repo sessions (ACTIVITY-064): Group repo events by 45m inactivity; session minutes = sum of per-event heuristics; confidence: low (isolated) / medium (grouped)
+- Swift hover tooltips: Use @State + .onHover modifier for mouse tracking
+- Swift Keychain: Use SecItemUpdate first, fallback to SecItemAdd on errSecItemNotFound
+- Swift Keychain delete: errSecItemNotFound is acceptable (idempotent delete)
+- Swift Keychain tests: Use unique service name per test (UUID-based) to isolate items
+- Swift TokenStore key: Composite format "provider:accountId" or "provider:host:accountId"
+- Swift OAuth: Use protocol + coordinator per provider, factory for creation
+- Swift sheets: Use `@State bool` + `.sheet(isPresented:)` for modals
+- Swift destructive actions: Use `.confirmationDialog` for removal confirmation
+- Swift picker in Settings: Use `.pickerStyle(.radioGroup)` for provider selection
+- Swift ASWebAuthenticationSession: Requires @MainActor; use withCheckedThrowingContinuation for async
+- Swift OAuth credentials: Check credentials BEFORE starting auth session to fail fast
+- Swift OAuth result: Include provider field for downstream account handling
+- Swift OAuth token exchange: Handle both JSON and form-encoded responses (GitHub uses form-encoded)
+- Swift OAuth Google: Use access_type=offline and prompt=consent for refresh tokens
+- Swift OAuthClientCredentials: Shared singleton actor - credentials persist across test runs
+- Swift disk cache: Use DispatchQueue for serializing file access with async wrapper
+- Swift cache keys: Sanitize special chars (: -> _) for safe filenames
+- Swift cache TTL: Check against file modification date, auto-delete expired on read
+- Swift cache JSON: Use ISO8601 date encoding to mirror activity-discovery output
+- Swift test disk cache: Use unique temp directories per test (UUID-based) for isolation
+- Swift XCTest async: Can't use await in XCTAssert autoclosures - assign to variable first
+- Swift calendar grid: Fill to 6 weeks (42 days) for consistent layout; use stride for chunking
+- Swift foregroundStyle ternary: Use helper function for complex color logic (avoid inline .tertiary)
+- Swift date range: End is exclusive - use `dayStart < range.end` for membership checks
+- Swift calendar picker: selectDate() clears selectedRange for mutual exclusivity
+- Swift launch at login: Use SMAppService.mainApp for macOS 13+ launch item registration
+- Swift SMAppService status: .notRegistered, .enabled, .requiresApproval, .notFound
+- Swift System Settings URL: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+- Swift Timer: Use RunLoop.main.add(timer, forMode: .common) for reliable firing
+- Swift debounce: Track lastTriggerTime and compare with debounceInterval
+- Swift RefreshScheduler: forceRefresh() bypasses debounce; triggerRefresh() respects it
+- Swift async timeout: Use withThrowingTaskGroup with sleep task for timeout pattern
+- Swift UserPreferences: Store in UserDefaults with JSONEncoder/Decoder for Codable structs
+- Swift schema versioning: Store version in preferences data, migrate on load if version < current
+- Swift preference tests: Use UUID-based suite names for UserDefaults isolation
+- Swift ActivityGrouping enum: Use .byDay/.byProvider prefix for clarity (not .day/.provider)
+- Swift deep linking: NSWorkspace.shared.open(url) to open URLs in default browser
+- Swift interactive cursor: NSCursor.pointingHand.push()/pop() on .onHover
+- Swift non-interactive items: opacity 0.6 and skip tap handler when activity.url == nil
+- Swift HTTPClient: Use actor for thread-safe rate limit tracking across concurrent requests
+- Swift ProviderAdapter: Protocol with fetchActivities and fetchHeatmap methods, Sendable conformance
+- Swift RequestBuilder: Helper for building provider-specific HTTP requests with correct auth headers
+- Swift GraphQL queries: Use multi-line strings (""") for readable query formatting
+- Swift GraphQL response types: Make Author optional (can be null if user deleted)
+- Swift ProviderAdapter: Use HTTPClient.executeGraphQL() for GitHub, returns raw Data for custom decoding
+- Swift HeatmapGenerator: Static enum with generateBuckets() and mergeBuckets() methods
+- GitLab auth: Use `PRIVATE-TOKEN` header (no Bearer prefix)
+- GitLab Events API: `after`/`before` require `YYYY-MM-DD`; use `page`/`per_page`
+- GitLab deep links: `/-/merge_requests/{iid}`, `/-/issues/{iid}`, `/-/commit/{sha}`, notes `#note_{id}`
+- GitLab self-hosted: Use `Account.host` for base URL when present
+
+---
+
+## 2026-01-21 - ACTIVITY-060
+- What was implemented
+  - Core project graph models: `Project`, `ProjectNode`, `ProjectEdge`, `ProjectGraph` (Codable, Sendable)
+  - Disk-backed project store: `DiskProjectStore` persisting JSON per project under Application Support
+  - Projects tab in Settings with project list (create/delete) and basic visual graph editor
+  - Graph editor supports draggable nodes and connect mode to add edges; auto-saves on changes
+- Files changed
+  - ActivityBarApp/Sources/Core/ProjectGraph.swift (new)
+  - ActivityBarApp/Sources/Storage/ProjectStore.swift (new)
+  - ActivityBarApp/Sources/App/ProjectGraphEditorView.swift (new)
+  - ActivityBarApp/Sources/App/SettingsView.swift (add Projects tab)
+  - ActivityBarApp/AGENTS.md (add Project Graph Editor patterns + learnings)
+  - ActivityBarApp/Tests/CoreTests/ProjectGraphTests.swift (new)
+  - ActivityBarApp/Tests/StorageTests/ProjectStoreTests.swift (new)
+  - ralph/prd.json (set ACTIVITY-060 passes: true)
+- **Learnings:**
+  - Persistence: Use Application Support for user-authored graphs; keep Caches for derived snapshots
+  - Codable: Avoid CGPoint in models; use a small `GraphPoint` for positions
+  - UI: A simple “Connect” toggle with tap A→B is robust and avoids drag-line gesture complexity in SwiftUI
+  - Encoding: JSON with `.sortedKeys` makes diffs stable and readable; update `updatedAt` on every save for recency sorting
+---
+
+## 2026-01-19 - ACTIVITY-037
+- What was implemented
+  - Extended `Account` with provider-specific optional fields: `organization`, `projects`, `calendarIds` (GitLab `host` already existed)
+  - Updated `AddAccountSheet` to collect Azure DevOps (organization, projects) and Google Calendar (calendarIds) inputs
+  - Added `ProviderSpecificConfig` passed alongside `OAuthResult`; merged into `Account` in `AccountsSettingsView`
+  - Kept backward-compatible `Account` initializer overload to satisfy existing tests
+  - Updated previews and AGENTS.md with patterns
+- Files changed
+  - ActivityBarApp/Sources/Core/Types.swift
+  - ActivityBarApp/Sources/App/SettingsView.swift
+  - ActivityBarApp/AGENTS.md
+  - ralph/prd.json
+- **Learnings:**
+  - Adding fields to a Swift struct changes the synthesized memberwise init signature; tests may link against the old symbol
+  - Provide an overload matching the prior initializer to preserve binary compatibility for tests
+  - For quick provider-specific config capture, use comma-separated TextFields and normalize by trimming/splitting
+  - Codable remains backward compatible when adding optional fields (decoding old data succeeds)
+---
+
+## 2026-01-19 - ACTIVITY-032
+- What was implemented
+  - Added GoogleCalendarProviderAdapter to fetch events via Google Calendar API v3
+  - Normalizes events to UnifiedActivity with type=meeting, handling all-day and timed events
+  - Handles pagination with pageToken and aggregates across all user calendars
+  - Wired adapter into ActivityRefreshProvider default adapters
+- Files changed
+  - ActivityBarApp/Sources/Providers/GoogleCalendarProviderAdapter.swift (new)
+  - ActivityBarApp/Sources/Providers/ActivityRefreshProvider.swift (updated)
+  - ActivityBarApp/AGENTS.md (updated with adapter patterns)
+- **Learnings:**
+  - Google Calendar events use either start.dateTime (timed) or start.date (all-day); prefer dateTime and fallback to date parsed as UTC
+  - Use singleEvents=true and orderBy=startTime to expand recurring instances in time windows
+  - Pagination uses nextPageToken; impose a reasonable safety cap on pages
+  - Attendee names: prefer displayName, fallback to email for participants list
+  - Stable IDs: prefix with "google-calendar:" and include account-scoped event id
+---
+
+## 2026-01-19 - ACTIVITY-031
+- What was implemented
+  - Implemented AzureDevOpsProviderAdapter with REST API v7.0
+  - Fetches pull requests, commits (per repo), and work items via WIQL
+  - Dynamically discovers projects per organization; limits to avoid over-fetch
+  - Normalizes to UnifiedActivity with deterministic IDs and deep links
+  - Wired adapter into ActivityRefreshProvider default adapters
+- Files changed
+  - ActivityBarApp/Sources/Providers/AzureDevOpsProviderAdapter.swift (new)
+  - ActivityBarApp/Sources/Providers/ActivityRefreshProvider.swift (updated mapping)
+  - ActivityBarApp/AGENTS.md (added ADO adapter notes + learnings)
+  - ralph/prd.json (set ACTIVITY-031 passes: true)
+- **Learnings:**
+  - Azure DevOps endpoints differ by scope: project-level paths include `/{project}/_apis`, org-level use `/_apis`
+  - Use WIQL to query work items changed since date, then batch-fetch details via `/_apis/wit/workitems?ids=`
+  - Work item `fields` use dotted keys; decode as `[String: value]` with a small enum to extract strings/objects
+  - Commit title is first line of message (truncate to 100); optional summary up to 200 chars
+  - Deterministic ID patterns: `pr-<id>`, `commit-<shortId>`, `wi-<id>` under `azure-devops:<accountId>` namespace
+---
+
+## 2026-01-19 - ACTIVITY-030
+- What was implemented:
+  - Implemented `GitLabProviderAdapter` to fetch user events via GitLab REST API v4
+  - Added pagination helpers to retrieve up to 100 items per page across pages
+  - Normalized GitLab events to `UnifiedActivity` with correct `ActivityType` mapping
+  - Built deep links for MRs, issues, commits, and notes (with anchors)
+  - Supported self-hosted GitLab instances via `Account.host` base URL
+  - Heatmap generation leverages existing `HeatmapGenerator.generateBuckets` from activities
+- Files changed:
+  - ActivityBarApp/Sources/Providers/GitLabProviderAdapter.swift (new/implemented)
+  - ActivityBarApp/AGENTS.md (added GitLab adapter patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-030 passes: true)
+- **Learnings:**
+  - GitLab uses `PRIVATE-TOKEN` header; do not prefix with "Bearer"
+  - Events API expects date-only `after`/`before` strings (YYYY-MM-DD)
+  - MR comments are better represented as `.codeReview`; issue comments as `.issueComment`
+  - Fetch minimal project info to construct deep links using `path_with_namespace`
+  - Stable IDs like `gitlab:{accountId}:event-{id}` ensure dedupe across refreshes
+---
+
+## 2026-01-19 - ACTIVITY-001
+- What was implemented:
+  - Created /activity-discovery scaffold with providers/, schemas/, normalizers/, tests/ subfolders
+  - Created config.example.json with placeholders for all 4 providers supporting multiple accounts
+  - Created CLI entrypoint (src/run.ts) with --provider, --account, --daysBack, --timeMin/timeMax args
+  - Defined TypeScript types: UnifiedActivity, HeatMapBucket, ActivityOutput, FetchWindow
+  - Configured TypeScript (strict mode, NodeNext module resolution) and vitest
+  - Added scaffold tests verifying type structure and directory layout
+- Files changed:
+  - activity-discovery/package.json, tsconfig.json, vitest.config.ts
+  - activity-discovery/schemas/types.ts, schemas/index.ts
+  - activity-discovery/providers/index.ts, normalizers/index.ts
+  - activity-discovery/src/run.ts
+  - activity-discovery/tests/scaffold.test.ts
+  - activity-discovery/config.example.json
+  - .gitignore (added node_modules, dist, config.json)
+- **Learnings:**
+  - Use `import.meta.dirname` in vitest for resolving paths relative to test file
+  - Provider IDs in breakdown interface need quotes for hyphenated names ('azure-devops', 'google-calendar')
+  - zod dependency added but not yet used (will be needed for ACTIVITY-002 runtime validation)
+---
+
+## 2026-01-19 - ACTIVITY-002
+- What was implemented:
+  - Created zod schemas for UnifiedActivity, HeatMapBucket, ActivityOutput in schemas/validation.ts
+  - Added validation functions: validateActivity, validateHeatMapBucket, validateActivityOutput
+  - Implemented safe validation variants (safeParse) returning result objects
+  - Created formatValidationErrors helper for actionable error messages
+  - Added 35 comprehensive validation tests covering valid/invalid records
+  - Created JSON Schema snapshots in schemas/snapshots/ for documentation
+- Files changed:
+  - activity-discovery/schemas/validation.ts (new)
+  - activity-discovery/schemas/index.ts (added export)
+  - activity-discovery/tests/validation.test.ts (new)
+  - activity-discovery/schemas/snapshots/*.snapshot.json (3 new files)
+- **Learnings:**
+  - Zod z.enum() works well for union types like Provider and ActivityType
+  - Use .regex() with custom message for format validation (timestamps, dates)
+  - SafeParse returns { success: boolean, data?: T, error?: ZodError } - useful for non-throwing validation
+  - ZodError.errors array contains path and message for each validation failure
+---
+
+## 2026-01-19 - ACTIVITY-003
+- What was implemented:
+  - Created src/aggregation.ts with aggregateToHeatmap function
+  - Groups activities by YYYY-MM-DD extracted from UTC timestamp (string slice)
+  - Counts total activity per day with optional per-provider breakdown
+  - Added helper functions: extractUTCDate, mergeHeatmapBuckets, getCountForDate, getBreakdownForDate
+  - Refactored run.ts to import aggregation from dedicated module
+  - Created src/index.ts as main module export point
+  - Added 30 comprehensive aggregation tests
+- Files changed:
+  - activity-discovery/src/aggregation.ts (new)
+  - activity-discovery/src/index.ts (new)
+  - activity-discovery/src/run.ts (refactored to use aggregation module)
+  - activity-discovery/tests/aggregation.test.ts (new)
+- **Learnings:**
+  - ISO8601 UTC timestamps always have date as first 10 chars: `timestamp.slice(0, 10)`
+  - Map<string, T> is efficient for grouping by key (date string)
+  - For UTC date extraction: string slicing is faster and simpler than Date parsing
+  - Test helper functions (createActivity) reduce boilerplate in tests
+---
+
+## 2026-01-19 - ACTIVITY-004
+- What was implemented:
+  - Created providers/github/ module with types.ts, queries.ts, fetch.ts, index.ts
+  - Uses GitHub GraphQL contributionsCollection for: commits, PRs, issues, reviews
+  - Separate query for issue comments (not in contributionsCollection)
+  - Maps to UnifiedActivity types: commit, pull_request, issue, issue_comment, code_review
+  - Supports time-windowed fetching (from/to parameters)
+  - Multiple account support with per-account activity fetching
+  - 21 provider contract tests
+- Files changed:
+  - activity-discovery/providers/github/*.ts (4 new files)
+  - activity-discovery/tests/github.test.ts (new)
+- **Learnings:**
+  - GitHub contributionsCollection groups commits by repo/day, not individual commits
+  - Issue comments require separate query - not included in contributionsCollection
+  - Need explicit type annotation `const data: Type = await...` in while loops to avoid TS7022
+  - PR reviews have pullRequest context, issue comments have issue context - include in title
+  - Truncate long body/summary fields to 200 chars for drill-down
+---
+
+## 2026-01-19 - ACTIVITY-005
+- What was implemented:
+  - Created providers/gitlab/ module with types.ts, fetch.ts, index.ts
+  - Uses GitLab REST API /api/v4/events endpoint for user activity
+  - Supports configurable baseUrl for self-hosted instances
+  - Maps event action_name + target_type to ActivityType via mapping table
+  - Builds deep links for MRs, issues, commits, notes with anchors
+  - Fetches project paths to build correct URLs
+  - 28 provider contract tests
+- Files changed:
+  - activity-discovery/providers/gitlab/*.ts (3 new files)
+  - activity-discovery/tests/gitlab.test.ts (new)
+- **Learnings:**
+  - GitLab Events API uses after/before date params (YYYY-MM-DD format, not full ISO8601)
+  - Notes (comments) have noteable_type to distinguish MR vs Issue comments
+  - Push events have push_data with commit_count, not individual commits
+  - Event timestamps may include timezone offset - normalize to Z suffix
+  - Project path_with_namespace needed to build proper URLs
+---
+
+## 2026-01-19 - ACTIVITY-006
+- What was implemented:
+  - Created providers/azure-devops/ module with types.ts, fetch.ts, index.ts
+  - Uses Azure DevOps REST API v7.0 with PAT Basic auth
+  - Fetches PRs, commits, work items with time filtering
+  - Uses WIQL for work item queries (date-based)
+  - Stable ID generation: azure-devops:{accountId}:{type}-{id}
+  - 29 provider contract tests
+- Files changed:
+  - activity-discovery/providers/azure-devops/*.ts (3 new files)
+  - activity-discovery/tests/azure-devops.test.ts (new)
+- **Learnings:**
+  - Azure DevOps uses Basic auth with PAT: `Basic ${base64(':'+token)}`
+  - PR API doesn't support date filter - must filter client-side
+  - Commits API supports searchCriteria.fromDate/toDate
+  - Work items require WIQL query for date-based search, then batch fetch by IDs
+  - Work item fields are namespaced: System.Title, System.WorkItemType, etc.
+  - Limit repo iteration to avoid combinatorial over-fetch
+---
+
+## 2026-01-19 - ACTIVITY-007
+- What was implemented:
+  - Created providers/google-calendar/ module with types.ts, fetch.ts, index.ts
+  - Uses Google Calendar REST API v3 with OAuth refresh tokens
+  - Supports multiple calendarIds per account
+  - Uses events list endpoint with timeMin/timeMax and singleEvents=true
+  - Minimal fields parameter reduces payload
+  - Extracts participants from attendees (excludes self and declined)
+  - 22 provider contract tests
+- Files changed:
+  - activity-discovery/providers/google-calendar/*.ts (3 new files)
+  - activity-discovery/tests/google-calendar.test.ts (new)
+- **Learnings:**
+  - Google Calendar uses refresh_token to get access_token via OAuth endpoint
+  - All-day events have date field, timed events have dateTime field
+  - singleEvents=true expands recurring events into individual instances
+  - fields parameter can specify nested fields: items(id,summary,attendees)
+  - Attendees include self flag and responseStatus for filtering
+  - organizer may or may not be self (check self flag)
+---
+
+## 2026-01-19 - ACTIVITY-008
+- What was implemented:
+  - Created normalizers/types.ts with ProviderNormalizer interface and TypeMappingEntry
+  - Created normalizers/mappings.ts with type mapping tables for all 4 providers
+  - Created normalizers/utils.ts with shared normalization utilities
+  - Updated normalizers/index.ts to re-export all modules
+  - Added 41 comprehensive normalization tests covering:
+    - UTC timestamp normalization (timezone conversion, date-only inputs)
+    - Activity ID generation
+    - Text truncation utilities
+    - Type mapping tables for all providers
+    - Mapping helper functions (getProviderTypeMappings, mapSourceToActivityType)
+    - Integration tests with representative inputs from each provider
+- Files changed:
+  - activity-discovery/normalizers/types.ts (new)
+  - activity-discovery/normalizers/mappings.ts (new)
+  - activity-discovery/normalizers/utils.ts (new)
+  - activity-discovery/normalizers/index.ts (updated exports)
+  - activity-discovery/tests/normalizers.test.ts (new)
+- **Learnings:**
+  - Type mapping tables with {source, target, description} tuples provide clear documentation
+  - Centralized PROVIDER_TYPE_MAPPINGS array enables provider-agnostic lookup
+  - normalizeToUTC handles multiple input formats: already UTC, with offset, date-only
+  - Date-only inputs (YYYY-MM-DD) get normalized to noon UTC to avoid day boundary issues
+  - Helper functions like getSourceTypesForActivityType enable reverse lookups
+  - Aggregating all mappings in PROVIDER_TYPE_MAPPINGS simplifies cross-provider operations
+---
+
+## 2026-01-19 - ACTIVITY-009
+- What was implemented:
+  - Implemented full CLI runner in src/run.ts
+  - Added config loading from JSON file (--config flag)
+  - Supports --provider all to fetch and merge from all providers
+  - Supports --account filter for partial ID matching across providers
+  - Outputs JSON with activities + heatmap to file (--output) or stdout
+  - Error isolation: each account fetch is wrapped in try/catch
+  - Failed accounts return empty activities with error message in output
+  - Added 27 CLI tests covering parsing, filtering, merging, and error handling
+- Files changed:
+  - activity-discovery/src/run.ts (major update)
+  - activity-discovery/tests/cli.test.ts (new)
+- **Learnings:**
+  - Account filter can use partial matching (`--account work` matches `github-work`, `gitlab-work`)
+  - Error isolation pattern: wrap each fetch, return error in result object, aggregate at end
+  - Output structure includes optional errors array only when accounts fail
+  - Console.error for progress/errors, console.log for JSON output (enables piping)
+---
+
+## 2026-01-19 - ACTIVITY-010
+- What was implemented:
+  - Created anti-overfetch.test.ts with 19 tests ensuring minimal field usage
+  - Tests verify aggregation only uses: timestamp, provider
+  - Tests verify drill-down uses: timestamp, title, summary, participants, url, sourceId, accountId
+  - Tests verify provider adapters discard extra fields from raw API responses
+  - Schema field inventory tests ensure exactly 10 fields exist (no accidental expansion)
+  - Snapshot tests verify all 4 providers produce only UnifiedActivity fields
+- Files changed:
+  - activity-discovery/tests/anti-overfetch.test.ts (new)
+- **Learnings:**
+  - Using Proxy to track field access is useful for testing which fields are actually used
+  - UnifiedActivity has 10 fields: id, provider, accountId, sourceId, type, timestamp, title, summary, participants, url
+  - 6 required fields: id, provider, accountId, sourceId, type, timestamp
+  - 4 optional fields: title, summary, participants, url
+  - Heatmap buckets have minimal structure: date, count, optional breakdown
+---
+
+## 2026-01-19 - ACTIVITY-011
+- What was implemented:
+  - Created docs/phase1-api-inventory.md with comprehensive API documentation
+  - Documented all endpoints/queries for each provider with parameters
+  - Listed required scopes/permissions per provider
+  - Documented pagination approaches (cursor, page, token-based)
+  - Included field-level justifications (heatmap vs drill-down use cases)
+  - Documented known limitations and fallback behaviors
+  - Documented config requirements for multi-account and self-hosted GitLab
+- Files changed:
+  - activity-discovery/docs/phase1-api-inventory.md (new)
+- **Learnings:**
+  - GitHub contributionsCollection doesn't include individual commits, just daily counts per repo
+  - GitLab Events API uses YYYY-MM-DD date format, not ISO8601
+  - Azure DevOps requires WIQL queries for date-filtered work items
+  - Google Calendar all-day events use `date` field, timed events use `dateTime`
+  - Documentation is critical for Phase-2 - defines exact API surface needed
+---
+
+## 2026-01-19 - ACTIVITY-012
+- What was implemented:
+  - Created ActivityBarApp/ Swift package with SPM modular structure
+  - App module: main entry point, MenuBarExtra, Settings scene, AppDelegate
+  - Core module: shared types (Provider, ActivityType, UnifiedActivity, HeatMapBucket, Account)
+  - Providers module: ProviderAdapter protocol stub
+  - Storage module: ActivityCache and TokenStore protocol stubs
+  - Menu bar app with accessory activation policy (no Dock icon)
+  - StatusItemLabelView with icon and "Activity" title
+  - MenuBarContentView with placeholder heatmap and activity list
+  - SettingsView with Accounts and General tabs
+  - 10 unit tests for Core types (Codable, enum cases, initialization)
+- Files changed:
+  - ActivityBarApp/Package.swift (new)
+  - ActivityBarApp/Sources/App/*.swift (4 new files)
+  - ActivityBarApp/Sources/Core/*.swift (2 new files)
+  - ActivityBarApp/Sources/Providers/Providers.swift (new)
+  - ActivityBarApp/Sources/Storage/Storage.swift (new)
+  - ActivityBarApp/Tests/CoreTests/TypesTests.swift (new)
+  - ActivityBarApp/Tests/StorageTests/StorageTests.swift (new)
+  - ActivityBarApp/AGENTS.md (new)
+  - .gitignore (added Swift build artifacts)
+- **Learnings:**
+  - MenuBarExtra with `.menuBarExtraStyle(.window)` allows custom SwiftUI views (not just menu items)
+  - Settings scene uses `Settings { }` not `WindowGroup` or `Window`
+  - `@NSApplicationDelegateAdaptor` needed to run code at app launch for accessory policy
+  - SPM executable targets use `executableTarget`, library modules use `target`
+  - Core types mirror activity-discovery schema for seamless data flow
+  - Provider enum raw values match activity-discovery provider names (e.g., "azure-devops")
+---
+
+## 2026-01-19 - ACTIVITY-013
+- What was implemented:
+  - Created AppState.swift in Core module with AppState and Session classes
+  - AppState is @MainActor + @Observable root object
+  - Session stores: accounts, activitiesByAccount, heatmapBuckets, selectedDate, selectedRange
+  - Added DateRange struct for date/range selection with singleDay() and today helpers
+  - Session computed properties: enabledAccounts, allActivities, selectedActivities, activitiesInRange
+  - AppState methods: add/remove/toggle accounts, update activities/heatmap, select date/range
+  - Heatmap merging logic aggregates counts by date across multiple account sources
+  - Updated ActivityBarApp.swift to create and inject AppState via @State
+  - Updated MenuBarContentView to display activity data from session
+  - Updated SettingsView to show accounts list with enable/disable toggles
+  - Added ActivityRowView and AccountRowView helper views
+  - Created 25 comprehensive unit tests for AppState and Session
+- Files changed:
+  - ActivityBarApp/Sources/Core/AppState.swift (new)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (updated - inject appState)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (updated - consume appState)
+  - ActivityBarApp/Sources/App/SettingsView.swift (updated - consume appState)
+  - ActivityBarApp/Tests/CoreTests/AppStateTests.swift (new)
+  - ActivityBarApp/AGENTS.md (updated with patterns)
+- **Learnings:**
+  - @MainActor init cannot have default parameter that calls another @MainActor init (Session())
+  - Use optional parameter with nil coalesce: `session: Session? = nil` then `self.session = session ?? Session()`
+  - @Observable classes use `@State` in SwiftUI App struct, not @StateObject (that's for ObservableObject)
+  - Date formatting for heatmap matching: use UTC timezone in DateFormatter
+  - Session owns mutable data; AppState owns Session reference and orchestrates updates
+  - Views receive AppState as parameter and access data via appState.session
+---
+
+## 2026-01-19 - ACTIVITY-014
+- What was implemented:
+  - Created DataCoordinator.swift in Core module for cache loading and background refresh orchestration
+  - DataCoordinator coordinates between cache (disk) and refresh (network) providers
+  - CacheProvider protocol for loading cached accounts, activities, and heatmap
+  - RefreshProvider protocol for fetching fresh data from providers
+  - InMemoryCacheProvider and StubRefreshProvider stubs for testing/development
+  - Wired DataCoordinator into ActivityBarApp using .task modifier for async init
+  - Cache loads immediately on overlay first open (renders instantly)
+  - Background refresh scheduled after brief delay to ensure UI renders first
+  - Connected Refresh button in overlay to trigger manual refresh
+  - Added 12 comprehensive tests for DataCoordinator (cache loading, refresh, debounce, error handling)
+- Files changed:
+  - ActivityBarApp/Sources/Core/DataCoordinator.swift (new)
+  - ActivityBarApp/Sources/Core/Core.swift (updated exports)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (updated - wire DataCoordinator)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (updated - onRefresh callback)
+  - ActivityBarApp/Tests/CoreTests/DataCoordinatorTests.swift (new)
+  - ActivityBarApp/AGENTS.md (updated with patterns)
+- **Learnings:**
+  - Use .task modifier on SwiftUI views for async initialization work
+  - Task.detached with @MainActor closure allows scheduling work after brief delay
+  - Debounce concurrent refresh calls by checking isRefreshing flag before starting
+  - Use @unchecked Sendable on test helper classes that track mutable state
+  - Protocol-based dependency injection (CacheProvider, RefreshProvider) enables testing
+  - Error isolation per-account: wrap each fetch in try/catch, aggregate errors at end
+---
+
+## 2026-01-19 - ACTIVITY-015
+- What was implemented:
+  - Created HeatmapView.swift with GitHub-style grid heatmap consuming HeatMapBucket data
+  - Grid displays ~13 weeks (3 months) with week columns (Sunday-Saturday rows)
+  - Cells color-coded by activity count (green gradient based on intensity)
+  - Hover shows date and total count tooltip via @State hoveredDate
+  - Clicking a cell calls onDateSelected to update session.selectedDate
+  - HeatmapCell subview handles individual day rendering with selection/hover states
+  - bucketsByDate dictionary provides O(1) lookup for cell coloring
+  - Updated MenuBarContentView to use HeatmapView instead of placeholder
+  - Added 15 comprehensive tests for heatmap data handling and aggregation
+- Files changed:
+  - ActivityBarApp/Sources/App/HeatmapView.swift (new)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (updated - use HeatmapView)
+  - ActivityBarApp/Tests/CoreTests/HeatmapViewTests.swift (new)
+  - ActivityBarApp/AGENTS.md (updated with HeatmapView patterns)
+- **Learnings:**
+  - SwiftUI .onHover modifier tracks mouse hover state for tooltips
+  - Dictionary(uniqueKeysWithValues:) is efficient for creating lookup tables from arrays
+  - Calendar.component(.weekday, from:) returns 1=Sunday through 7=Saturday
+  - Color intensity scaling: calculate ratio against maxCount, bucket into 4-5 levels
+  - Date grid calculation: find current week's Sunday, then walk back weeksToShow-1 weeks
+  - Use Session.dateString(from:) consistently for UTC date string formatting
+---
+
+## 2026-01-19 - ACTIVITY-016
+- What was implemented:
+  - Created ActivityListView.swift for activity list with grouping and sorting support
+  - ActivityItemView displays timestamp, type icon, title/summary, provider badge
+  - ActivityGrouping enum supports .none, .provider, .day grouping modes
+  - Sorting always by timestamp descending within groups
+  - Provider grouping sorts alphabetically, day grouping sorts by date descending
+  - Range selection auto-groups by day when multiple days are selected
+  - Type icons using SF Symbols with color coding by activity type
+  - Provider badges with short names (GH, GL, ADO, Cal)
+  - Integrated into MenuBarContentView replacing inline ActivityRowView
+  - Added 15 comprehensive tests for activity list functionality
+- Files changed:
+  - ActivityBarApp/Sources/App/ActivityListView.swift (new)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (updated - use ActivityListView)
+  - ActivityBarApp/Tests/CoreTests/ActivityListViewTests.swift (new)
+  - ActivityBarApp/AGENTS.md (updated with ActivityListView patterns)
+- **Learnings:**
+  - Dictionary(grouping:by:) is efficient for grouping arrays by computed key
+  - Use fixed UTC dates in tests (e.g., noon UTC) to avoid timezone boundary issues
+  - SF Symbols provide good activity type icons (arrow.triangle.merge for PR, etc.)
+  - Short provider names (GH, GL, ADO, Cal) work well for compact badges
+  - Effective grouping pattern: auto-select grouping based on selection context
+---
+
+## 2026-01-19 - ACTIVITY-020
+- What was implemented:
+  - Created KeychainTokenStore in Storage module using Security framework
+  - TokenStore protocol with async methods: getToken, setToken, deleteToken, hasToken, listAccountIds
+  - TokenStoreError enum for graceful error handling (keychainError, dataEncodingError, etc.)
+  - TokenKeyGenerator helper for consistent composite key generation
+  - Multi-account support with "provider:accountId" or "provider:host:accountId" keys
+  - DispatchQueue for serializing keychain operations to avoid race conditions
+  - Update-first pattern: SecItemUpdate, fallback to SecItemAdd on errSecItemNotFound
+  - Idempotent delete: errSecItemNotFound is acceptable, not an error
+  - 32 comprehensive unit tests covering all operations, edge cases, and error scenarios
+- Files changed:
+  - ActivityBarApp/Sources/Storage/Storage.swift (expanded TokenStore protocol + KeychainTokenStore)
+  - ActivityBarApp/Tests/StorageTests/StorageTests.swift (added 32 tests)
+  - ActivityBarApp/AGENTS.md (added KeychainTokenStore patterns)
+- **Learnings:**
+  - SecItemUpdate returns errSecItemNotFound if item doesn't exist - use update-then-add pattern
+  - SecItemDelete with errSecItemNotFound should not throw (idempotent operation)
+  - Use DispatchQueue for serializing keychain access in async context
+  - Test keychain code with unique service names per test to avoid conflicts between tests
+  - TokenKeyGenerator.parse() handles both 2-part (standard) and 3-part (self-hosted) keys
+  - @unchecked Sendable on KeychainTokenStore since DispatchQueue handles thread safety
+---
+
+## 2026-01-19 - ACTIVITY-018
+- What was implemented:
+  - Created OAuthCoordinator protocol in Providers module for provider-specific OAuth flows
+  - OAuthError enum for authentication error types (userCancelled, authorizationFailed, etc.)
+  - OAuthResult struct containing token, accountId, displayName, optional host
+  - LoginState enum as state machine for OAuth progress (idle, authenticating, exchangingToken, etc.)
+  - Stub coordinators for all 4 providers (GitHub, GitLab, Azure DevOps, Google Calendar)
+  - OAuthCoordinatorFactory for creating coordinators by provider type
+  - AddAccountSheet UI with provider picker, host field for self-hosted, OAuth trigger
+  - AccountRowView updated with remove/logout button and confirmation dialog
+  - AccountsSettingsView wired to TokenStore for login/logout flows
+  - 27 new unit tests for OAuth types, coordinators, and mock helpers
+- Files changed:
+  - ActivityBarApp/Sources/Providers/Providers.swift (added OAuth coordination)
+  - ActivityBarApp/Sources/App/SettingsView.swift (AddAccountSheet, logout button)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (inject TokenStore)
+  - ActivityBarApp/Package.swift (added ProvidersTests target)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (new)
+  - ActivityBarApp/AGENTS.md (added OAuth patterns)
+- **Learnings:**
+  - SwiftUI sheet: use `@State` bool with `.sheet(isPresented:)` for modal presentation
+  - SwiftUI confirmationDialog: use `.confirmationDialog` modifier for destructive action confirmation
+  - Pass closures (onComplete, onError) to sheets for result handling back to parent
+  - Provider picker using `.pickerStyle(.radioGroup)` works well for settings UI
+  - Mock coordinators with configurable results/errors are useful for testing
+  - @unchecked Sendable on mock/preview token stores that track mutable state
+  - Stub coordinators throw configurationError to indicate "not yet implemented"
+---
+
+## 2026-01-19 - ACTIVITY-019
+- What was implemented:
+  - Full OAuth coordination using ASWebAuthenticationSession for browser-based flows
+  - OAuthConfiguration struct with provider-specific endpoints and scopes from activity-discovery
+  - OAuthClientCredentials actor for storing client ID/secret per provider
+  - BaseOAuthCoordinator class with shared ASWebAuthenticationSession handling
+  - GitHubOAuthCoordinator with read:user, repo, read:org scopes
+  - GitLabOAuthCoordinator with read_api, read_user scopes (supports self-hosted instances)
+  - AzureDevOpsOAuthCoordinator with vso.code, vso.work scopes
+  - GoogleCalendarOAuthCoordinator with calendar.readonly scope
+  - OAuthResult now includes provider field for proper account handling
+  - Updated SettingsView to use provider from OAuthResult
+  - WebAuthContextProvider for ASWebAuthenticationSession presentation context
+  - Added 24 new tests for OAuth configuration, credentials, and coordinators
+- Files changed:
+  - ActivityBarApp/Sources/Providers/Providers.swift (full OAuth implementation)
+  - ActivityBarApp/Sources/App/SettingsView.swift (use result.provider)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (new OAuth tests)
+  - ActivityBarApp/AGENTS.md (OAuth patterns and gotchas)
+- **Learnings:**
+  - ASWebAuthenticationSession requires @MainActor and presentation context
+  - Use withCheckedThrowingContinuation for async/await with ASWebAuthenticationSession callbacks
+  - Check credentials BEFORE starting auth session to fail fast with clear error
+  - GitHub OAuth token exchange returns form-encoded response by default, not JSON
+  - Google OAuth needs access_type=offline and prompt=consent to get refresh tokens
+  - OAuthClientCredentials is a shared singleton - test isolation requires careful design
+  - Azure DevOps OAuth uses different token exchange parameters (client_assertion_type)
+  - GitLab self-hosted just needs different base URL endpoints, same scopes as cloud
+---
+
+## 2026-01-19 - ACTIVITY-021
+- What was implemented:
+  - DiskActivityCache class for JSON-based disk persistence with TTL support
+  - CacheKeyGenerator for generating safe filenames from account IDs
+  - CacheTTL enum with policies: activities (1h), heatmap (6h), accounts (no expiry)
+  - Activities index to track per-account cache keys for efficient loading
+  - Automatic heatmap merging across multiple accounts on load
+  - DiskCacheProvider implementing CacheProvider protocol for DataCoordinator
+  - clearCache(for:) and clearAllCache() for cache cleanup
+  - 23 new comprehensive unit tests for disk cache operations
+- Files changed:
+  - ActivityBarApp/Sources/Storage/Storage.swift (DiskActivityCache, CacheKeyGenerator, CacheTTL)
+  - ActivityBarApp/Tests/StorageTests/StorageTests.swift (cache tests)
+  - ActivityBarApp/AGENTS.md (disk cache patterns)
+- **Learnings:**
+  - Use DispatchQueue for serializing file operations in async context
+  - Sanitize cache keys by replacing : with _ for safe filenames
+  - TTL check uses file modification date - auto-delete expired entries on read
+  - JSONEncoder with ISO8601 date strategy mirrors activity-discovery output format
+  - Test disk cache with unique temp directories (UUID-based) for isolation
+  - Can't use await inside XCTAssert autoclosures - assign to local variable first
+  - Heatmap merging sums counts and combines breakdown dictionaries by date
+---
+
+## 2026-01-19 - ACTIVITY-023
+- What was implemented:
+  - Wired DiskCacheProvider into ActivityBarApp for cached-first startup
+  - Added isOffline property to Session for offline mode tracking
+  - Added offline indicator (wifi.slash icon) in MenuBarContentView footer
+  - finishRefresh() automatically sets isOffline based on success/error
+  - Added setOffline() method to AppState for explicit control
+  - All acceptance criteria verified: cache first, background refresh, offline indicator, non-blocking
+  - Added 5 new unit tests for offline mode state transitions
+- Files changed:
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (wire DiskCacheProvider)
+  - ActivityBarApp/Sources/Core/AppState.swift (isOffline, setOffline)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (offline indicator)
+  - ActivityBarApp/Tests/CoreTests/AppStateTests.swift (offline tests)
+  - ActivityBarApp/AGENTS.md (cached-first and offline patterns)
+- **Learnings:**
+  - Cached-first startup: DiskCacheProvider enables instant UI from disk cache
+  - Use Task.detached with small delay (100ms) to schedule refresh after UI renders
+  - Session.isOffline is set automatically by finishRefresh(error:) - true on error
+  - SF Symbol "wifi.slash" provides clear offline visual feedback
+  - Non-blocking pattern already existed via .task + Task.detached architecture
+---
+
+## 2026-01-19 - ACTIVITY-017
+- What was implemented:
+  - Created CalendarPickerView.swift with full calendar picker UI
+  - Single day selection mode (default) and range selection mode (toggle)
+  - Month navigation with previous/next buttons and Today shortcut
+  - Quick selection buttons: Today, Last 7d, Last 30d, Last 90d
+  - Range selection: first tap sets start, second tap sets end (auto-orders)
+  - Updated HeatmapView to support selectedRange parameter for range highlighting
+  - HeatmapCell now shows accent border for cells within selected range
+  - Wired CalendarPickerView into MenuBarContentView
+  - Selection updates both heatmap highlight and activity list filtering
+  - Added 20 comprehensive unit tests for date/range selection logic
+- Files changed:
+  - ActivityBarApp/Sources/App/CalendarPickerView.swift (new - calendar picker UI)
+  - ActivityBarApp/Sources/App/HeatmapView.swift (range selection support)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (integrate calendar picker)
+  - ActivityBarApp/Tests/CoreTests/CalendarPickerViewTests.swift (new - 20 tests)
+  - ActivityBarApp/AGENTS.md (calendar picker patterns)
+- **Learnings:**
+  - SwiftUI ternary expressions with .tertiary/.secondary need explicit Color type
+  - Use helper function for complex ternary color logic instead of inline expressions
+  - Array.chunked(into:) pattern: stride + Array slice for creating 2D grid arrays
+  - Calendar grid: fill to 6 weeks (42 days) for consistent layout height
+  - Date range end is exclusive: use `dayStart < range.end` for range membership checks
+  - DateRange.singleDay() creates range from startOfDay to startOfNextDay
+  - selectDate() clears selectedRange (ensures mutual exclusivity)
+  - Quick selection buttons use negative day offsets for "Last N days" ranges
+---
+
+## 2026-01-19 - ACTIVITY-022
+- What was implemented:
+  - Created LaunchAtLoginManager in Core module using SMAppService (macOS 13+)
+  - LaunchAtLoginError enum for user-friendly error messages
+  - Settings toggle with Binding to manager.setEnabled()
+  - Status description shows "Requires approval" with link to System Settings
+  - Progress indicator during register/unregister operations
+  - Error banner with dismiss button for failed operations
+  - Wired LaunchAtLoginManager into ActivityBarApp and SettingsView
+  - Added 15 unit tests for error types and manager behavior
+- Files changed:
+  - ActivityBarApp/Sources/Core/LaunchAtLoginManager.swift (new)
+  - ActivityBarApp/Sources/Core/Core.swift (export LaunchAtLoginManager)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (inject LaunchAtLoginManager)
+  - ActivityBarApp/Sources/App/SettingsView.swift (LaunchAtLoginToggle view, update GeneralSettingsView)
+  - ActivityBarApp/Tests/CoreTests/LaunchAtLoginTests.swift (new - 15 tests)
+  - ActivityBarApp/AGENTS.md (LaunchAtLoginManager pattern and gotchas)
+- **Learnings:**
+  - SMAppService.mainApp provides access to the main app's registration
+  - SMAppService.status returns .notRegistered, .enabled, .requiresApproval, or .notFound
+  - register() and unregister() throw on failure - wrap in do/catch for error handling
+  - "Requires approval" means user must manually enable in System Settings > Login Items
+  - Open Login Items settings via URL: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+  - @Observable + @MainActor works well for UI-bound state management
+  - Tests may fail to actually register (no valid bundle in test environment) - test error handling paths
+  - Use private(set) for properties that should only be modified internally
+---
+
+## 2026-01-19 - ACTIVITY-024
+- What was implemented:
+  - Created RefreshScheduler in Core module for periodic and manual refresh
+  - RefreshInterval enum with 5m/15m/30m/1h/manual options (Codable, CaseIterable)
+  - Timer-based periodic refresh with configurable interval
+  - Debouncing to prevent rapid successive triggers (default 30 seconds)
+  - forceRefresh() bypasses debounce for user-initiated actions
+  - Status description shows "Refreshing...", "Updated X ago", or "Not yet refreshed"
+  - Timeout support for async operations using withThrowingTaskGroup
+  - Settings UI picker for refresh interval configuration
+  - Wired RefreshScheduler into ActivityBarApp and MenuBarContentView
+  - Added 22 unit tests for RefreshInterval and RefreshScheduler
+- Files changed:
+  - ActivityBarApp/Sources/Core/RefreshScheduler.swift (new)
+  - ActivityBarApp/Sources/Core/Core.swift (export RefreshScheduler, RefreshInterval)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (create and wire RefreshScheduler)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (display scheduler status)
+  - ActivityBarApp/Sources/App/SettingsView.swift (refresh interval picker)
+  - ActivityBarApp/Tests/CoreTests/RefreshSchedulerTests.swift (new - 22 tests)
+  - ActivityBarApp/AGENTS.md (RefreshScheduler pattern and gotchas)
+- **Learnings:**
+  - Timer.scheduledTimer needs RunLoop.main.add(timer, forMode: .common) for reliable firing
+  - Debounce pattern: track lastTriggerTime and compare with debounceInterval
+  - forceRefresh() vs triggerRefresh() - bypass debounce for user actions
+  - Interval setter should restart timer when value changes
+  - Use weak references in timer/task callbacks to avoid retain cycles
+  - withThrowingTaskGroup enables timeout pattern for async operations
+  - @Observable property changes automatically trigger view updates
+  - RefreshInterval.manual returns nil for seconds (no timer)
+---
+
+## 2026-01-19 - ACTIVITY-025
+- What was implemented:
+  - Created UserPreferences model with schema versioning (version 1)
+  - HeatmapRange enum: 90d/180d/365d options with displayName and days computed properties
+  - ActivityGrouping enum: none/byProvider/byDay - moved from ActivityListView to Core module
+  - PreferencesManager with auto-save on didSet and migration support
+  - Settings UI: heatmap range picker, activity grouping picker, show meetings toggle
+  - Refresh interval persisted to preferences and restored on app launch
+  - MenuBarContentView applies preferences for filtering and grouping
+  - Added 17 unit tests for HeatmapRange, ActivityGrouping, UserPreferences, PreferencesManager
+- Files changed:
+  - ActivityBarApp/Sources/Core/UserPreferences.swift (new)
+  - ActivityBarApp/Sources/Core/Core.swift (export UserPreferences types)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (create PreferencesManager, pass to views)
+  - ActivityBarApp/Sources/App/SettingsView.swift (preference controls in General tab)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (apply preferences for filtering/grouping)
+  - ActivityBarApp/Sources/App/ActivityListView.swift (use Core's ActivityGrouping, update enum cases)
+  - ActivityBarApp/Tests/CoreTests/UserPreferencesTests.swift (new - 17 tests)
+  - ActivityBarApp/AGENTS.md (PreferencesManager pattern and gotchas)
+- **Learnings:**
+  - UserDefaults + JSONEncoder/Decoder is clean pattern for Codable preferences
+  - Schema versioning: store version in data, migrate on load if < current
+  - Auto-save via didSet ensures preferences are always persisted
+  - Use UUID-based suite names for UserDefaults in tests for isolation
+  - Fallback to defaults on decode failure - don't crash on corrupted data
+  - ActivityGrouping.byDay vs .day - "by" prefix is clearer for grouping semantics
+  - Moving enum to shared Core module allows reuse across App and Settings
+---
+
+## 2026-01-19 - ACTIVITY-026
+- What was implemented:
+  - Enhanced ActivityItemView with isInteractive parameter for URL-based interactivity
+  - Items with URLs show hover effect (background highlight, pointer cursor)
+  - Items with URLs show link indicator arrow on hover
+  - Items without URLs appear dimmed (opacity 0.6) and non-interactive
+  - NSCursor.pointingHand.push()/pop() for proper cursor behavior
+  - Tap handling only triggers if activity has URL
+  - Meeting events support both calendar URLs and meeting links (Google Meet, Zoom, etc.)
+  - Added 4 unit tests for deep linking behavior
+- Files changed:
+  - ActivityBarApp/Sources/App/ActivityListView.swift (ActivityItemView isInteractive param, hover effects)
+  - ActivityBarApp/Tests/CoreTests/ActivityListViewTests.swift (4 new deep linking tests)
+  - ActivityBarApp/AGENTS.md (deep linking gotchas)
+- **Learnings:**
+  - NSWorkspace.shared.open(url) opens in default browser
+  - NSCursor.pointingHand.push()/pop() for interactive cursor on macOS
+  - .onHover modifier for mouse tracking in SwiftUI
+  - Opacity 0.6 is good for disabled/non-interactive visual state
+  - Check activity.url != nil before enabling tap handler
+  - Meeting events can have calendar URL or meeting link - both are valid deep links
+---
+
+## 2026-01-19 - ACTIVITY-027
+- What was implemented:
+  - Fixed StatusItemLabelView to render properly in menu bar
+  - Changed from HStack with Text+Image to Image-only approach
+  - Uses chart.bar.fill SF Symbol with proper sizing (14pt, 18x18 frame)
+  - Added hierarchical symbol rendering mode for visual polish
+  - Added logging to ActivityBarApp for debugging app lifecycle
+- Files changed:
+  - ActivityBarApp/Sources/App/StatusItemLabelView.swift (HStack removed, Image-only)
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (added os.log logging)
+  - ActivityBarApp/AGENTS.md (added MenuBarExtra label gotcha)
+- **Learnings:**
+  - MenuBarExtra label closure: HStack with Text+Image doesn't render - must use Image-only
+  - This is a common gotcha for macOS menu bar apps using SwiftUI MenuBarExtra
+  - Use .frame() to ensure consistent sizing of menu bar icons
+  - .symbolRenderingMode(.hierarchical) adds visual depth to SF Symbols
+---
+
+## 2026-01-19 - ACTIVITY-028
+- What was implemented:
+  - ProviderAdapter protocol with fetchActivities and fetchHeatmap methods
+  - ProviderError enum for all error types (network, auth, rate limit, etc.)
+  - HTTPClient actor with rate limiting awareness and automatic header tracking
+  - RequestBuilder helpers for building provider-specific requests
+  - CursorPagination and PagePagination helpers for different pagination styles
+  - DateFormatting utilities for API request/response date handling
+  - 95 new tests covering all components
+- Files changed:
+  - ActivityBarApp/Sources/Providers/Providers.swift (expanded with networking layer)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (added 95 tests)
+  - ActivityBarApp/AGENTS.md (added patterns and gotchas)
+- **Learnings:**
+  - HTTPClient as actor provides safe concurrent access to rate limit state
+  - Rate limit headers differ by provider: GitHub uses X-RateLimit-*, GitLab uses RateLimit-*
+  - GitLab uses PRIVATE-TOKEN header (not Bearer auth like GitHub)
+  - Azure DevOps uses Basic auth with base64-encoded ":token"
+  - Pagination patterns: cursor-based for GraphQL, page-based for REST
+  - DateFormatting.dateString() for YYYY-MM-DD format needed by GitLab API
+---
+
+## 2026-01-19 - ACTIVITY-035
+- What was implemented:
+  - GitHub GraphQL queries ported to Swift as string constants
+  - GITHUB_CONTRIBUTIONS_QUERY for PRs, issues, reviews, and commit contributions
+  - GITHUB_ISSUE_COMMENTS_QUERY with cursor-based pagination
+  - GITHUB_VIEWER_LOGIN_QUERY for getting authenticated user login
+  - Full Codable response types for JSON decoding
+  - GitHubGraphQLResponse<T> wrapper for data/errors envelope handling
+  - 16 tests for queries and response type decoding
+- Files changed:
+  - ActivityBarApp/Sources/Providers/GitHubQueries.swift (new file)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (16 new tests)
+  - ActivityBarApp/AGENTS.md (added patterns and gotchas)
+- **Learnings:**
+  - GitHub GraphQL responses have nested author fields that can be null
+  - Issue comments require separate query (not in contributionsCollection)
+  - PageInfo struct has hasNextPage and endCursor for pagination
+  - Multi-line Swift strings (""") preserve formatting for GraphQL queries
+---
+
+## 2026-01-19 - ACTIVITY-029 & ACTIVITY-036
+- What was implemented:
+  - GitHubProviderAdapter implementing ProviderAdapter protocol
+  - Fetches contributions via GraphQL (commits, PRs, issues, reviews)
+  - Fetches issue comments with cursor-based pagination
+  - Normalizes all activity types to UnifiedActivity
+  - HeatmapGenerator.generateBuckets() aggregates activities by UTC date
+  - HeatmapGenerator.mergeBuckets() combines buckets from multiple accounts
+  - 10 new tests for adapter and heatmap generator
+- Files changed:
+  - ActivityBarApp/Sources/Providers/GitHubProviderAdapter.swift (new file)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (10 new tests)
+  - ActivityBarApp/AGENTS.md (added patterns and gotchas)
+- **Learnings:**
+  - Commit contributions are aggregated per repo per day (not individual commits)
+  - ID format "github:accountId:type-sourceId" enables deterministic deduplication
+  - HeatmapGenerator uses DateFormatting.dateString() for UTC YYYY-MM-DD grouping
+  - Issue comments require filtering by viewer login and date (API returns all)
+  - Safety limit of 10000 activities prevents runaway pagination
+---
+
+## 2026-01-19 - ACTIVITY-033
+- What was implemented:
+  - ActivityRefreshProvider implementing RefreshProvider protocol
+  - Routes fetch requests to appropriate ProviderAdapter by Account.provider
+  - Token retrieval from TokenStore before adapter calls
+  - Optional cache persistence for fetched data
+  - Disabled accounts return empty arrays (not errors)
+  - withDiskCache() convenience factory method
+  - 6 tests for provider functionality
+- Files changed:
+  - ActivityBarApp/Sources/Providers/ActivityRefreshProvider.swift (new file)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (6 new tests)
+  - ActivityBarApp/AGENTS.md (added patterns and gotchas)
+- **Learnings:**
+  - RefreshProvider protocol from DataCoordinator has simple fetchActivities/fetchHeatmap interface
+  - TokenStore.getToken() returns nil for missing tokens (need to check before adapter call)
+  - createDefaultAdapters() allows easy registration of new providers
+  - Use @unchecked Sendable on providers that hold references to actors
+---
+
+## 2026-01-19 - ACTIVITY-034
+- What was implemented:
+  - Replaced refreshProvider: nil with ActivityRefreshProvider.withDiskCache()
+  - DataCoordinator now receives non-nil refreshProvider
+  - Background refresh will now actually fetch data from GitHub API
+  - Fetched data persisted to disk cache
+- Files changed:
+  - ActivityBarApp/Sources/App/ActivityBarApp.swift (initializeCoordinatorAndLoadCache)
+  - ActivityBarApp/AGENTS.md (added gotcha)
+- **Learnings:**
+  - Final integration is a one-line change once all pieces are in place
+  - ActivityRefreshProvider.withDiskCache() creates provider with proper cache wiring
+  - App still needs OAuth credentials and account setup for actual data fetching
+---
+
+## 2026-01-19 - ACTIVITY-038
+- What was implemented
+  - Added provider-specific validations and post-OAuth Google Calendar selection in AddAccountSheet
+  - Azure DevOps: require non-empty organization and at least one project before starting OAuth
+  - Google Calendar: fetch calendarList with Bearer token, present checkbox list, preselect primary, require at least one selected
+  - Adjusted sheet phases and buttons (Sign In… → Add Account) based on selection state
+- Files changed
+  - ActivityBarApp/Sources/App/SettingsView.swift
+  - ActivityBarApp/AGENTS.md
+  - ralph/prd.json (set ACTIVITY-038 passes: true)
+- **Learnings:**
+  - Post-OAuth selection avoids asking for Google calendar IDs up-front and reduces errors
+  - Use https://www.googleapis.com/calendar/v3/users/me/calendarList; minimal fields are sufficient (id, summary, primary)
+  - Preselecting primary improves UX; still require at least one explicit selection
+  - Validation before OAuth (Azure) surfaces issues earlier and simplifies error handling
+---
+
+## 2026-01-20 - ACTIVITY-039
+- What was implemented
+  - Created RecentItemRowView<Leading, Content> generic base component
+  - Accepts @ViewBuilder closures for leading view (avatar/icon) and content area
+  - Configurable alignment (default .top), spacing (default 8), and padding (horizontal 10, vertical 6)
+  - onOpen callback for tap gesture handling
+  - Uses .contentShape(Rectangle()) for proper tap target including whitespace
+  - Added AppTests target to Package.swift for App module testing
+  - Created 15 comprehensive unit tests covering defaults, customization, and edge cases
+- Files changed
+  - ActivityBarApp/Sources/App/RecentItemRowView.swift (new)
+  - ActivityBarApp/Tests/AppTests/RecentItemRowViewTests.swift (new)
+  - ActivityBarApp/Package.swift (added AppTests target)
+  - ActivityBarApp/AGENTS.md (documented pattern and learnings)
+  - ralph/prd.json (set ACTIVITY-039 passes: true)
+- **Learnings:**
+  - RecentItemRowView is the foundation for all activity item views - generic design enables reuse
+  - ViewBuilder closures provide declarative, type-safe composition
+  - contentShape(Rectangle()) is critical for tap targets that include padding/whitespace
+  - Spacer(minLength: 2) at end ensures content stays left-aligned
+  - Generic types <Leading: View, Content: View> allow compile-time type checking
+  - Default parameters match RepoBar's visual specifications (spacing 8, padding 10/6)
+  - Test target dependencies: AppTests depends on both App and Core modules
+---
+
+## 2026-01-20 - ACTIVITY-040
+- What was implemented
+  - Created MenuHighlighting.swift with environment key and color style system
+  - MenuItemHighlightedKey environment key with default value false
+  - MenuHighlightStyle enum with static functions for adaptive colors
+  - Primary, secondary, tertiary color hierarchy with opacity progression (1.0, 0.86, 0.7)
+  - Error and selectionBackground color functions
+  - MenuFocusRingStyle enum for consistent focus ring behavior
+  - All colors use NSColor system colors for automatic light/dark mode adaptation
+  - Added 23 comprehensive unit tests covering all styles and edge cases
+- Files changed
+  - ActivityBarApp/Sources/App/MenuHighlighting.swift (new)
+  - ActivityBarApp/Tests/AppTests/MenuHighlightingTests.swift (new)
+  - ActivityBarApp/AGENTS.md (documented pattern and benefits)
+  - ralph/prd.json (set ACTIVITY-040 passes: true)
+- **Learnings:**
+  - Environment-based highlighting eliminates prop drilling through component hierarchy
+  - All child views automatically respond to parent highlight state via environment
+  - NSColor system colors (.controlTextColor, .secondaryLabelColor, etc.) adapt to appearance automatically
+  - Opacity progression (1.0 → 0.86 → 0.7) creates clear visual hierarchy when highlighted
+  - selectedMenuItemTextColor provides correct white/contrast color for highlighted items
+  - Static functions with Bool parameter provide clean API: `MenuHighlightStyle.primary(isHighlighted)`
+  - Environment approach matches RepoBar's proven pattern for menu item styling
+---
+
+## 2026-01-20 - ACTIVITY-041
+- What was implemented
+  - Created ActivityIconMapper enum with static symbolName(for:) method
+  - Maps all 11 ActivityType cases to SF Symbol names per PRD specifications
+  - Semantically meaningful icons (e.g., arrow.up.circle for commit push action)
+  - Comment-related types use bubble iconography (text.bubble, checkmark.bubble)
+  - Provider-agnostic mapping - same icon for same type across all providers
+  - Added 20 comprehensive unit tests covering mappings, completeness, uniqueness, and integration
+- Files changed
+  - ActivityBarApp/Sources/App/ActivityIconMapper.swift (new)
+  - ActivityBarApp/Tests/AppTests/ActivityIconMapperTests.swift (new)
+  - ActivityBarApp/AGENTS.md (documented pattern and mappings)
+  - ralph/prd.json (set ACTIVITY-041 passes: true)
+- **Learnings:**
+  - Enum with static methods provides namespace without requiring instances
+  - SF Symbol names follow lowercase.with.dots convention
+  - Semantic icon selection improves UX (commit = arrow.up = push, issue = exclamation = attention)
+  - Exhaustive switch ensures all ActivityType cases are handled at compile time
+  - RepoBar's activitySymbolName() method provided proven reference pattern
+  - All icons are standard SF Symbols available across macOS versions
+  - Tests verify not just mapping existence but semantic clarity (e.g., commit contains "arrow" and "up")
+---
+
+## 2026-01-20 - ACTIVITY-042
+- What was implemented
+  - Created MenuStatBadge component for displaying icon + count badges
+  - Implemented StatValueFormatter enum for compact number formatting
+  - Supports optional label, value (Int or String), and systemImage parameters
+  - Integrates with MenuHighlighting environment for automatic color changes
+  - Uses .monospacedDigit() for consistent alignment in lists
+- Files changed
+  - ActivityBarApp/Sources/App/MenuStatBadge.swift (new)
+  - ActivityBarApp/Tests/AppTests/MenuStatBadgeTests.swift (new - 18 tests)
+  - ActivityBarApp/AGENTS.md (added MenuStatBadge pattern and learnings)
+  - ralph/prd.json (set ACTIVITY-042 passes: true)
+- **Learnings:**
+  - StatValueFormatter.compact() formats numbers: <1k as-is, 1k-10k with decimal (1.2K), 10k-1M whole K, 1M-10M decimal M, 10M-1B whole M, >=1B caps at 999M
+  - Number formatting removes .0 decimal suffixes automatically (e.g., "2.0K" becomes "2K")
+  - Two initializer patterns: one takes Int value (auto-formats), one takes String valueText (custom)
+  - monospacedDigit() modifier ensures numbers align properly in vertical lists
+  - Fixed icon width (12pt) keeps badges aligned when icon presence varies
+  - Optional label and systemImage allow flexible use cases (star count, fork count, comment count)
+  - MenuHighlightStyle.secondary() provides consistent coloring that adapts to menu selection
+  - Reference implementation from RepoBar's MenuStatBadge provided proven pattern
+---
+
+## 2026-01-20 - ACTIVITY-043
+- What was implemented
+  - Created AvatarView component using SwiftUI's AsyncImage for remote image loading
+  - Shows circular avatar with configurable size (default 20x20)
+  - Displays placeholder with person.fill icon when no URL provided or on load failure
+  - AsyncImage handles three phases: .empty (loading), .success (image), .failure (placeholder)
+  - Placeholder uses Circle with .separatorColor fill and centered person.fill icon at 50% size
+  - Added 18 comprehensive unit tests covering initialization, sizes, URL validation, and edge cases
+- Files changed
+  - ActivityBarApp/Sources/App/AvatarView.swift (new)
+  - ActivityBarApp/Tests/AppTests/AvatarViewTests.swift (new)
+  - ActivityBarApp/AGENTS.md (added AvatarView pattern and learnings)
+  - ralph/prd.json (set ACTIVITY-043 passes: true)
+- **Learnings:**
+  - AsyncImage is simpler than Kingfisher for basic image loading (no external dependencies)
+  - AsyncImage provides automatic URLCache-based caching - no manual implementation needed
+  - AsyncImage phases (.empty, .success, .failure) handle all loading states declaratively
+  - person.fill icon at 50% of avatar size provides good visual balance in placeholder
+  - Circle fill with .separatorColor matches macOS system UI conventions
+  - Configurable size parameter supports different contexts (list items 20x20, cards 24x24, headers 32x32)
+  - Reference pattern from RepoBar simplified using AsyncImage instead of Kingfisher
+---
+
+## 2026-01-20 - ACTIVITY-044
+- What was implemented
+  - Created RelativeTimeFormatter enum with static string(from:) methods
+  - Uses RelativeDateTimeFormatter with .short unitsStyle for compact output
+  - Convenience method uses current time: string(from: date)
+  - Explicit comparison method: string(from: date, relativeTo: now)
+  - Handles all time ranges: seconds, minutes, hours, days, weeks, months, years
+  - Supports both past and future dates with localized output
+  - Added 24 comprehensive unit tests covering all time ranges and edge cases
+- Files changed
+  - ActivityBarApp/Sources/App/RelativeTimeFormatter.swift (new)
+  - ActivityBarApp/Tests/AppTests/RelativeTimeFormatterTests.swift (new)
+  - ActivityBarApp/AGENTS.md (added RelativeTimeFormatter pattern and gotchas)
+  - ralph/prd.json (set ACTIVITY-044 passes: true)
+- **Learnings:**
+  - RelativeDateTimeFormatter with .short unitsStyle provides concise output (e.g., "2h ago", "1d ago")
+  - Formatter is locale-aware and automatically adapts to user's system language
+  - RelativeDateTimeFormatter may round time intervals (e.g., 30 days → "4 wk ago" instead of "1 mo ago")
+  - Tests should use flexible assertions to handle formatter rounding behavior
+  - Two-method pattern: convenience (uses Date()) and explicit (accepts relativeTo parameter)
+  - Foundation's RelativeDateTimeFormatter handles edge cases (future dates, very old dates) gracefully
+  - No need for custom logic - RelativeDateTimeFormatter handles all time units automatically
+  - Reference implementation from RepoBar uses identical pattern (enum with static methods)
+---
+
+## 2026-01-20 - ACTIVITY-045
+- What was implemented
+  - Created ActivityRowView generic component for displaying any UnifiedActivity type
+  - Uses RecentItemRowView as base layout with activity type icon in leading position
+  - Title displayed in .callout.weight(.medium) with lineLimit 2
+  - Metadata row shows provider badge (GH/GL/ADO/Cal), author (first participant), and relative time
+  - Full integration with MenuHighlighting environment for automatic color adaptation
+  - Opens URL on click via NSWorkspace (skips tap handler if URL is nil)
+  - Added 30 comprehensive unit tests covering all activity types, edge cases, and display logic
+- Files changed
+  - ActivityBarApp/Sources/App/ActivityRowView.swift (new - 206 lines)
+  - ActivityBarApp/Tests/AppTests/ActivityRowViewTests.swift (new - 30 tests)
+  - ActivityBarApp/AGENTS.md (added ActivityRowView patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-045 passes: true)
+- **Learnings:**
+  - ActivityRowView serves as generic fallback for any activity type - specialized views (CommitActivityView, etc.) will extend this pattern
+  - Composition pattern works well: RecentItemRowView (layout) + ActivityIconMapper (icons) + RelativeTimeFormatter (time) + MenuHighlighting (colors)
+  - Provider short names (GH, GL, ADO, Cal) established early ensures consistency across all views
+  - Metadata row spacing of 6pt between elements provides compact but readable display
+  - Title can be nil - view handles gracefully by showing only metadata row
+  - All text colors use MenuHighlightStyle functions for automatic highlight state adaptation
+  - Icon fixed at 20x20 frame matches avatar size convention from other components
+  - First participant displayed as author matches RepoBar's pattern
+  - Optional URL handling: guard let url = activity.url else { return } prevents crash on missing URLs
+---
+
+## 2026-01-20 - ACTIVITY-056
+- What was implemented
+  - Extended UnifiedActivity model with 6 optional UI-specific fields:
+    - authorAvatarURL (URL?) - Avatar URL for activity author
+    - labels ([ActivityLabel]?) - Labels for issues/PRs with name and color hex
+    - commentCount (Int?) - Number of comments on issue/PR
+    - isDraft (Bool?) - Draft status for pull requests
+    - sourceRef (String?) - Head branch name for PRs
+    - targetRef (String?) - Base branch name for PRs
+  - Created ActivityLabel struct with id, name, and color (hex string)
+  - Added backward-compatible initializer (10-parameter version) for existing tests
+  - Updated GitHubProviderAdapter REST API normalization to populate new fields
+  - Enhanced PullRequestEvent, IssuesEvent, IssueCommentEvent, PullRequestReviewEvent, and PullRequestReviewCommentEvent handlers
+  - Updated GitHubEvent.Payload structs to include User and Label nested types
+- Files changed
+  - ActivityBarApp/Sources/Core/Types.swift (added fields + backward-compatible init)
+  - ActivityBarApp/Sources/Providers/GitHubProviderAdapter.swift (populate new fields in normalizeEvent)
+  - ActivityBarApp/AGENTS.md (documented pattern and learnings)
+  - ralph/prd.json (set ACTIVITY-056 passes: true)
+- **Learnings:**
+  - When adding fields to a struct with many dependents, provide backward-compatible initializer overload
+  - Optional fields preserve Codable backward compatibility - old cached data decodes successfully
+  - GitHub REST API events include user objects with login and avatar_url fields
+  - GitHub labels have id (Int?), name, and color (hex without # prefix)
+  - Pull request draft status and comment counts available in PR event payloads
+  - Head/base branch refs available in PR events for displaying "feature → main" info
+  - Backward-compatible initializer pattern: new init calls itself with all params, old init calls new init with nil defaults
+  - This pattern prevents "undefined symbol" linker errors when tests reference old initializer signature
+---
+
+## 2026-01-20 - ACTIVITY-046
+- What was implemented
+  - Created CommitActivityView component matching RepoBar's CommitMenuItemView design
+  - Uses RecentItemRowView as base layout with commit-specific avatar placeholder
+  - Displays commit message as title (lineLimit 2, .callout.weight(.medium))
+  - Metadata row: short SHA (7 chars, monospaced), author, repo name, relative time
+  - Added Actor struct to GitHubEvent for author info (login, avatar_url)
+  - Updated PushEvent normalization to populate authorAvatarURL, participants, and sourceId with SHA
+  - Commit-specific placeholder: Circle with arrow.turn.down.right icon (matches RepoBar pattern)
+  - SHA extracted from sourceId (full commit SHA) with 7-char truncation for display
+  - Repo name stored in summary field ("Repo: owner/repo, SHA: abc123") for metadata display
+  - URL format: https://github.com/{owner}/{repo}/commit/{sha} for individual commits
+  - Added 18 comprehensive unit tests covering SHA extraction, repo parsing, avatar handling, and edge cases
+- Files changed
+  - ActivityBarApp/Sources/App/CommitActivityView.swift (new)
+  - ActivityBarApp/Tests/AppTests/CommitActivityViewTests.swift (new)
+  - ActivityBarApp/Sources/Providers/GitHubProviderAdapter.swift (added Actor, updated PushEvent)
+  - ActivityBarApp/AGENTS.md (documented patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-046 passes: true)
+- **Learnings:**
+  - GitHub Events API includes actor field at top level with login and avatar_url
+  - PushEvent payload.commits is an array - use first commit for message and SHA
+  - sourceId should store full commit SHA for easy display truncation (String.prefix(7))
+  - Commit message parsing: first line via .components(separatedBy: "\n").first
+  - Repo name embedded in summary field for type-specific views to extract
+  - Commit URLs should point to individual commit (/commit/{sha}) not branch (/commits/{branch})
+  - RecentItemRowView provides flexible composition for type-specific activity views
+  - Commit-specific placeholder icon (arrow.turn.down.right) differentiates from generic person.fill
+  - Integration with MenuHighlighting environment enables automatic color adaptation
+  - Tests verify view initialization and edge cases but don't test rendered UI (SwiftUI limitation)
+---
+## 2026-01-20 - ACTIVITY-047
+- What was implemented
+  - Created PullRequestActivityView component matching RepoBar's PullRequestMenuItemView design
+  - Uses RecentItemRowView as base layout with PR-specific styling
+  - Displays PR title, number (#123, monospaced), author, and relative time
+  - Draft badge with orange capsule design (matches RepoBar's DraftPillView exactly)
+  - Comment count badge using MenuStatBadge with text.bubble icon
+  - Branch info row showing "head → base" in monospaced font
+  - Labels displayed as comma-separated text (chip rendering pending ACTIVITY-052)
+  - Avatar or PR-specific placeholder (arrow.triangle.branch icon)
+  - Full MenuHighlighting integration for automatic color adaptation
+  - Added DraftBadgeView private component with exact RepoBar styling
+- Files changed
+  - ActivityBarApp/Sources/App/PullRequestActivityView.swift (new - 243 lines)
+  - ActivityBarApp/Tests/AppTests/PullRequestActivityViewTests.swift (new - 25 tests)
+  - ActivityBarApp/Sources/Providers/GitHubProviderAdapter.swift (updated normalization)
+  - ActivityBarApp/Tests/CoreTests/ActivityListViewTests.swift (fixed field count test)
+  - ActivityBarApp/Tests/ProvidersTests/ProvidersTests.swift (fixed Google Calendar scope test)
+  - ActivityBarApp/AGENTS.md (documented patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-047 passes: true)
+- **Learnings:**
+  - PR number should be stored in sourceId as numeric string for easy display formatting
+  - Title field should contain PR title without number prefix - number shown separately in metadata
+  - Draft badge styling: orange capsule with semi-transparent bg/stroke, different colors for highlighted state
+  - GitHub REST API doesn't separate review comments from regular comments (would need GraphQL)
+  - Comment count badge uses text.bubble icon - review comments would use checkmark.bubble (when available)
+  - Branch refs displayed as "head → base" in monospaced font for clarity
+  - Labels currently rendered as comma-separated text until LabelChipView implemented (ACTIVITY-052)
+  - Same sourceId pattern (numeric string) should apply to IssuesEvent for consistency
+  - Test fixes needed when adding new fields to UnifiedActivity (field count assertions)
+  - OAuth scope tests need updating when scopes change (Google Calendar added userinfo scopes)
+  - All 429 tests passing after implementation
+---
+
+## 2026-01-20 - ACTIVITY-048
+- What was implemented
+  - Created IssueActivityView component matching RepoBar's IssueMenuItemView design
+  - Uses RecentItemRowView as base layout with issue-specific styling
+  - Displays issue title, number (#456, monospaced), author, and relative time
+  - Comment count badge using MenuStatBadge with text.bubble icon
+  - Labels displayed as comma-separated text (chip rendering pending ACTIVITY-052)
+  - Avatar or issue-specific placeholder (exclamationmark.circle icon)
+  - Full MenuHighlighting integration for automatic color adaptation
+- Files changed
+  - ActivityBarApp/Sources/App/IssueActivityView.swift (new - 228 lines)
+  - ActivityBarApp/Tests/AppTests/IssueActivityViewTests.swift (new - 30 tests)
+  - ActivityBarApp/AGENTS.md (documented patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-048 passes: true)
+- **Learnings:**
+  - Issue number should be stored in sourceId as numeric string for easy display formatting
+  - Title field should contain issue title without number prefix - number shown separately in metadata
+  - Comment count badge uses text.bubble icon (matches issue comment activity type)
+  - Same sourceId pattern (numeric string) applies to both IssuesEvent and PullRequestEvent
+  - GitHubProviderAdapter already handles IssuesEvent properly with all necessary fields
+  - IssuesEvent normalization populates: sourceId, title, participants, authorAvatarURL, labels, commentCount
+  - Labels temporarily rendered as comma-separated text until LabelChipView (ACTIVITY-052)
+  - Issue-specific placeholder uses exclamationmark.circle icon instead of generic person.fill
+  - All 460 tests passing after implementation (30 new IssueActivityView tests)
+---
+
+
+## 2026-01-20 - ACTIVITY-059
+- Removed all GitHub provider support from the codebase
+- Files changed: 29 files modified, 2 deleted (GitHubProviderAdapter.swift, GitHubQueries.swift)
+- **Learnings:**
+  - Provider removal requires systematic updates across OAuth, adapters, views, tests, and credentials
+  - Shared utilities (like HeatmapGenerator) used by adapters should be moved to common location (Providers.swift)
+  - Test data conversions can introduce subtle bugs (duplicate dictionary keys, incorrect assertions)
+  - All switch statements on Provider enum must be updated (colors, display names, short names, etc.)
+  - Preview data in views uses provider field and must be updated
+  - OAuth configuration includes static let declarations that must be removed
+  - OAuth coordinator factory switch statement must be updated
+  - Test files have GitHub-specific test classes (GitHubQueriesTests, GitHubResponseTypesTests) that should be commented out
+  - Build passes but some tests may need additional cleanup for edge cases
+  - HeatmapGenerator now supports provider breakdowns in buckets for analytics
+---
+
+## 2026-01-20 - ACTIVITY-049
+- What was implemented
+  - Created CodeReviewActivityView component for displaying code review activities
+  - Uses RecentItemRowView as base layout with review-specific styling
+  - Review context derived from title, sourceId, or URL (e.g., "Review on #123")
+  - Review state detection from title/summary keywords (approved/changes requested/commented)
+  - Color-coded state badges with capsule design (green for approved, red for changes, gray for comments)
+  - Avatar support with checkmark.bubble icon placeholder
+  - Optional summary/comment snippet display (lineLimit 2)
+  - Full MenuHighlighting environment integration
+- Files changed
+  - ActivityBarApp/Sources/App/CodeReviewActivityView.swift (new - 381 lines)
+  - ActivityBarApp/Tests/AppTests/CodeReviewActivityViewTests.swift (new - 43 tests)
+  - ActivityBarApp/AGENTS.md (updated with CodeReviewActivityView patterns)
+  - ralph/prd.json (set ACTIVITY-049 passes: true)
+- **Learnings:**
+  - GitLab Events API doesn't provide explicit review states in event data
+  - Must infer review state from action keywords: "approved", "commented", "changes requested"
+  - Review state detection uses case-insensitive keyword matching in both title and summary fields
+  - PR number extraction strategy: try numeric sourceId first, then regex from URL
+  - URL regex patterns: `/-/merge_requests/(\d+)` (GitLab), `/pull/(\d+)` (GitHub-style)
+  - Review context preserves "Comment on" or "Review on" prefixes when present in title
+  - Fallback to generic "Code Review" text when PR context cannot be determined
+  - Badge colors use system color conventions: .systemGreen (approved), .systemRed (changes), .separatorColor (commented)
+  - Badge styling follows DraftPillView pattern: capsule with semi-transparent bg/stroke and different colors for highlighted state
+  - Placeholder uses checkmark.bubble icon to match code review activity type semantics
+  - Fixed warning: sourceId is already String type, no need for conditional cast
+  - Tests focus on state detection logic, context extraction, and edge cases (not rendered UI due to SwiftUI testing limitations)
+  - 43 comprehensive tests covering all review states, PR number extraction methods, and edge cases
+---
+
+## 2026-01-20 - ACTIVITY-050
+- What was implemented
+  - Created CommentActivityView component for displaying issue and PR comments
+  - Comment context detection distinguishes between issue and PR/MR comments via URL patterns
+  - Comment snippet displays first 100 chars of body/summary with truncation and whitespace trimming
+  - Metadata row shows author (first participant) and relative time
+  - Avatar support with text.bubble icon placeholder for comments without avatar URLs
+  - Full MenuHighlighting environment integration for automatic color adaptation
+  - Added 32 comprehensive unit tests covering all comment display scenarios
+- Files changed
+  - ActivityBarApp/Sources/App/CommentActivityView.swift (new - 246 lines)
+  - ActivityBarApp/Tests/AppTests/CommentActivityViewTests.swift (new - 32 tests)
+  - ActivityBarApp/AGENTS.md (documented patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-050 passes: true)
+- **Learnings:**
+  - Comment context extraction must distinguish between issue comments and PR/MR comments
+  - GitLab URL patterns: `/-/issues/123#note_456` (issue), `/-/merge_requests/123#note_456` (MR)
+  - Comment snippet should prioritize summary field over title (title often contains context like "Comment on #123")
+  - 100-character truncation with ellipsis (…) maintains readability for long comments
+  - Whitespace trimming (trimmingCharacters) prevents empty/blank snippets from taking visual space
+  - Title beginning with "Comment on" should be used for context display, not snippet content
+  - Fallback chain for context: URL pattern matching → numeric sourceId → generic "Comment" text
+  - Comment-specific placeholder uses text.bubble icon to visually match activity type semantics
+  - Tests verify context extraction, snippet truncation, URL pattern matching, and edge cases
+  - Edge cases tested: multiline comments, unicode characters, special characters, very long URLs
+  - CommentActivityView follows established pattern from IssueActivityView and CodeReviewActivityView
+  - RecentItemRowView base layout provides consistent structure across all activity type views
+  - All 64 tests passing after implementation (32 new CommentActivityView tests)
+---
+## 2026-01-20 - ACTIVITY-054
+- What was implemented
+  - Updated ActivityListView to use type-specific view components instead of generic ActivityItemView
+  - Created @ViewBuilder function activityView(for:) that switches on activity.type
+  - Commits route to CommitActivityView
+  - Pull requests route to PullRequestActivityView
+  - Issues route to IssueActivityView
+  - Comments route to CommentActivityView
+  - Code reviews route to CodeReviewActivityView
+  - Other types (meeting, workItem, deployment, release, wiki, other) route to generic ActivityRowView
+  - Removed old ActivityItemView struct - no longer needed with specialized views
+  - Removed GitHub provider reference from providerDisplayName function
+- Files changed
+  - ActivityBarApp/Sources/App/ActivityListView.swift (replaced ActivityItemView with activityView routing)
+  - ActivityBarApp/AGENTS.md (documented type-specific view routing pattern)
+  - ralph/prd.json (set ACTIVITY-054 passes: true)
+- **Learnings:**
+  - @ViewBuilder function provides type-safe routing to specialized views based on activity type
+  - Switch statement on ActivityType ensures compile-time exhaustiveness checking
+  - Specialized views handle common types; generic view handles edge cases
+  - Old ActivityItemView removed entirely - type-specific views provide richer UIs with better visual hierarchy
+  - All type-specific views share common patterns (RecentItemRowView, MenuHighlighting, ActivityIconMapper)
+  - Integration is seamless - swap single view component and routing logic, keep grouping/filtering/sorting
+  - Tests continue to pass without modification - type-specific views maintain same interface contracts
+  - Activity list now matches RepoBar's polished design with proper visual hierarchy per type
+  - Removing 189 lines of generic code, adding 20 lines of routing logic - net reduction of 169 lines
+  - LazyVStack already provides smooth scrolling performance - no additional optimization needed
+---
+
+## 2026-01-20 - ACTIVITY-053
+- What was implemented
+  - Created ProviderBadgeView component with SF Symbol icons for each provider
+  - GitLab uses g.square (G in a square representing GitLab)
+  - Azure DevOps uses cloud.fill (cloud icon representing Azure cloud platform)
+  - Google Calendar uses calendar (calendar icon representing scheduling)
+  - Component integrates with MenuHighlighting environment for automatic color adaptation
+  - Uses tertiary color style (MenuHighlightStyle.tertiary) for subtle visual presence
+  - 12x12 frame with 10pt icons matching design spec
+  - Added 26 comprehensive unit tests covering symbol mappings, uniqueness, semantic clarity, and design specs
+- Files changed
+  - ActivityBarApp/Sources/App/ProviderBadgeView.swift (new - 69 lines)
+  - ActivityBarApp/Tests/AppTests/ProviderBadgeViewTests.swift (new - 26 tests)
+  - ActivityBarApp/AGENTS.md (documented ProviderBadgeView patterns)
+  - ralph/prd.json (set ACTIVITY-053 passes: true)
+- **Learnings:**
+  - Icon-based badges are more compact and visually consistent than text-based short names
+  - SF Symbols provide semantic meaning: g.square for GitLab, cloud.fill for Azure cloud, calendar for Google Calendar
+  - Each provider has unique, recognizable icon that doesn't overlap with other providers
+  - 10pt icon size with 12x12 frame provides compact badge suitable for inline display in metadata rows
+  - MenuHighlighting environment integration ensures badges adapt to selection state automatically
+  - Tertiary color style (opacity 0.7 when highlighted) provides subtle presence without dominating metadata row
+  - Tests should verify symbol names, uniqueness, semantic clarity, and design spec compliance
+  - Private computed property (symbolName) keeps symbol mapping logic encapsulated
+  - Exhaustive switch on Provider enum ensures all cases handled at compile time
+  - All 64 tests passing (26 new ProviderBadgeView tests, no regressions)
+---
+
+## 2026-01-20 - ACTIVITY-058
+- What was implemented
+  - Created StateViews.swift with EmptyStateView, LoadingStateView, and ErrorStateView components
+  - EmptyStateView shows tray.fill icon (24pt, semibold) with title and subtitle for no-data states
+  - LoadingStateView shows ProgressView (.regular size) with customizable loading text
+  - ErrorStateView shows exclamationmark.triangle.fill (24pt, orange) with message and retry button
+  - Integrated state views into MenuBarContentView via activityListContent @ViewBuilder computed property
+  - Implemented state hierarchy: no accounts → disabled accounts → loading → error → empty → content
+  - Error state with retry button shown when no cached data exists (full error experience)
+  - Error banner shown when cached data exists but refresh fails (graceful degradation)
+  - All state views use consistent sizing (maxWidth: .infinity, minHeight: 120)
+  - Created 26 comprehensive unit tests in StateViewsTests.swift
+- Files changed
+  - ActivityBarApp/Sources/App/StateViews.swift (new - 137 lines)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (refactored activity list content)
+  - ActivityBarApp/Tests/AppTests/StateViewsTests.swift (new - 26 tests)
+  - ActivityBarApp/AGENTS.md (added ACTIVITY-058 patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-058 passes: true)
+- **Learnings:**
+  - RepoBar's MenuEmptyStateView, MenuLoadingRowView patterns provide proven reference for state views
+  - @ViewBuilder computed property enables clean state-based rendering without nested if/else
+  - State hierarchy should prioritize critical issues (no accounts) before transient states (loading)
+  - Error states need two modes: full error view (no data) vs banner (cached data available)
+  - Retry button design: plain style button with accent color background (0.1 opacity) + stroke (0.3 opacity, 1px)
+  - Standard frame sizing (maxWidth: .infinity, minHeight: 120) ensures consistent vertical space
+  - EmptyStateView contextual messages based on state: "No accounts", "All disabled", "No activities for [this day/this range]"
+  - Accessibility: use .accessibilityElement(children: .combine) for static views, .contain for interactive views
+  - SwiftUI view unit tests verify creation without crashing, not rendered output
+  - Test edge cases: empty strings, long text (200+ chars), Unicode (Chinese/Japanese/Russian), special characters, multiline
+  - Rapid consecutive initialization test (100 iterations) validates memory safety
+  - Icon + text VStack with 8pt spacing matches RepoBar's visual rhythm
+  - ProgressView with .regular control size is standard for loading indicators on macOS
+  - All 26 tests passing, build successful, typecheck passes
+---
+
+## 2026-01-20 - ACTIVITY-051
+- What was implemented
+  - Created FlowLayout struct implementing SwiftUI Layout protocol
+  - Implements flow-wrapping algorithm: items flow left-to-right, wrapping to next line when exceeding width
+  - Configurable itemSpacing (default 6pt) and lineSpacing (default 4pt)
+  - Core layout algorithm via private measure() method calculating placements for all subviews
+  - sizeThatFits() returns total size needed for all children
+  - placeSubviews() positions each child at calculated origin
+  - Created 27 comprehensive unit tests covering initialization, content types, edge cases, and use cases
+- Files changed
+  - ActivityBarApp/Sources/App/FlowLayout.swift (new - 139 lines)
+  - ActivityBarApp/Tests/AppTests/FlowLayoutTests.swift (new - 27 tests)
+  - ActivityBarApp/AGENTS.md (added FlowLayout Pattern section)
+  - ralph/prd.json (set ACTIVITY-051 passes: true)
+- **Learnings:**
+  - SwiftUI Layout protocol requires implementing sizeThatFits and placeSubviews methods
+  - Cache parameter exists but unused in simple implementations (optimization opportunity for complex layouts)
+  - ProposedViewSize.unspecified lets subviews report their intrinsic size
+  - Wrapping logic must check `(x > 0)` to avoid wrapping first item on empty row
+  - Placement struct (subview, origin, size) provides clean separation of measurement from rendering
+  - reserveCapacity() on placements array improves performance for large child collections
+  - Total height calculation: `y + rowHeight` (current row's y-offset plus its height)
+  - Default width fallback: 240pt when proposal.width is nil
+  - Final width uses min(maxX, availableWidth) to stay within bounds
+  - Unit tests can verify view creation but cannot test actual layout positioning (SwiftUI rendering limitation)
+  - Negative spacing values are allowed (could be useful for overlapping effects)
+  - FlowLayout works with any View type, not limited to fixed-size items
+  - This is foundation for LabelChipView (ACTIVITY-052) which will use FlowLayout for displaying multiple labels
+---
+
+
+## 2026-01-20 - ACTIVITY-052
+- What was implemented
+  - Created MenuLabelChipsView container view using FlowLayout for multiple label chips
+  - Created LabelChipView component displaying colored dot + label name
+  - Created LabelColorParser enum for hex color string parsing with sRGB color space support
+  - Updated PullRequestActivityView to use MenuLabelChipsView instead of comma-separated text
+  - Updated IssueActivityView to use MenuLabelChipsView instead of comma-separated text
+  - Added 24 comprehensive unit tests covering all color parsing and view creation scenarios
+- Files changed
+  - ActivityBarApp/Sources/App/LabelChipView.swift (new - 155 lines)
+  - ActivityBarApp/Tests/AppTests/LabelChipViewTests.swift (new - 207 lines)
+  - ActivityBarApp/Sources/App/PullRequestActivityView.swift (updated - replaced temp text with chips)
+  - ActivityBarApp/Sources/App/IssueActivityView.swift (updated - replaced temp text with chips)
+  - ActivityBarApp/AGENTS.md (added LabelChipView Pattern section with comprehensive docs)
+  - ralph/prd.json (set ACTIVITY-052 passes: true)
+- **Learnings:**
+  - **CRITICAL: sRGB vs calibrated color spaces** - Must use NSColor(srgbRed:green:blue:alpha:) NOT NSColor(calibratedRed:green:blue:alpha:)
+  - calibratedRed applies color space transformation that changes RGB values (e.g., #FF0000 becomes RGB(0.84, 0.23, 0.29) instead of (1.0, 0.0, 0.0))
+  - Tests must use `.usingColorSpace(.sRGB)` NOT `.usingColorSpace(.deviceRGB)` for accurate color assertions
+  - CGFloat components need Double() conversion when using XCTAssertEqual with accuracy parameter
+  - LabelColorParser accepts hex strings with or without # prefix, sanitizes via .trimmingCharacters
+  - Hex parsing: guard for exactly 6 chars after cleaning, Int(radix: 16) for conversion, bitwise shifts for RGB extraction
+  - Invalid colors fall back to .separatorColor gracefully - no crashes on malformed data
+  - FlowLayout (ACTIVITY-051) is prerequisite - MenuLabelChipsView uses it for wrapping behavior
+  - MenuHighlighting environment integration enables automatic color adaptation on selection
+  - Chip design: HStack(spacing: 5), padding(.horizontal: 6, .vertical: 2), RoundedRectangle(cornerRadius: 6)
+  - Color opacity progression: fill 0.16 (subtle), stroke 0.45/0.85 (dark/light), dot/text adapt to highlight
+  - RepoBar reference implementation (MenuLabelChipsView.swift) provided proven pattern to follow
+  - SwiftUI previews with light/dark mode and highlighted/normal states help verify visual design
+  - 24 tests cover: parsing (with/without #, case, invalid), GitHub colors, view creation, edge cases (Unicode, emoji, long names)
+  - All 24 tests passing after color space fix, typecheck clean, no regressions in existing tests
+---
+
+## 2026-01-20 - ACTIVITY-055
+- What was implemented
+  - Added date-based activity grouping with bucket headers: "Today", "Yesterday", "This Week", "Earlier"
+  - Implemented dateBucket(for:) function to categorize activities into date buckets
+  - Implemented dateBucketOrder(_:) function to ensure consistent chronological display order
+  - Updated grouping logic to use buckets instead of individual date strings
+  - Simplified formatDayHeader since bucket names are already display-ready
+- Files changed
+  - ActivityBarApp/Sources/App/ActivityListView.swift (updated grouping and display logic)
+  - ActivityBarApp/AGENTS.md (documented date bucketing pattern)
+  - ralph/prd.json (set ACTIVITY-055 passes: true)
+- **Learnings:**
+  - Date bucketing provides better UX than individual date sections for activity lists
+  - "This Week" bucket includes last 7 days (excluding Today/Yesterday) using Calendar.date(byAdding:)
+  - "Earlier" is catch-all for anything older than 7 days - keeps list manageable
+  - Calendar.isDateInToday() and Calendar.isDateInYesterday() provide reliable date checking
+  - dateBucketOrder() with numeric values (0,1,2,3) ensures consistent display order in sorted()
+  - Bucket names like "Today", "Yesterday" are more user-friendly than raw dates
+  - Using buckets instead of YYYY-MM-DD keys reduces number of sections significantly
+  - effectiveGrouping logic also uses buckets for range selection detection
+  - Build passed cleanly, testActivitiesCanBeGroupedByDay test confirms functionality works
+---
+## 2026-01-20 - ACTIVITY-057
+- What was implemented
+  - Added keyboard navigation support to ActivityListView
+  - Arrow key navigation (Up/Down) through activities
+  - Enter key opens focused activity URL
+  - Escape key closes menu (auto-handled by MenuBarExtra window style)
+  - Visual focus highlighting using MenuHighlighting environment
+  - @FocusState tracks currently focused activity by ID
+  - keyboardFocusEnabled flag distinguishes keyboard vs mouse interaction
+- Files changed
+  - ActivityBarApp/Sources/App/ActivityListView.swift (added focus state, keyboard handlers, navigation logic)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (wired onEscapePressed callback)
+  - ActivityBarApp/AGENTS.md (documented keyboard navigation patterns and learnings)
+  - ralph/prd.json (set ACTIVITY-057 passes: true)
+- **Learnings:**
+  - @FocusState works with .focused() modifier to track focus by value equality
+  - .focusable() modifier required on both individual items AND ScrollView container
+  - MoveCommandDirection switch must handle .up, .down, .left, .right cases
+  - Use @unknown default for future-proofing against new MoveCommandDirection values
+  - MenuBarExtra with .window style auto-closes on Escape without custom handling
+  - onEscapePressed callback is optional/future-proofing feature
+  - MenuHighlighting environment propagates through view hierarchy automatically
+  - No changes needed to type-specific views for keyboard highlight - inheritance via environment
+  - flatActivities computed property provides linear list from grouped structure for navigation
+  - keyboardFocusEnabled prevents focus highlight flashing on initial render
+  - .firstIndex(where:) for finding current focus is O(n) but negligible for small lists (30 max)
+  - Focus state updates automatically trigger view refreshes for visual feedback
+  - Existing onActivityTapped callback reused for both mouse and keyboard activation
+  - Enter key checks for nil URL before opening (same as tap handler)
+---
+
+## 2026-01-21 - ACTIVITY-063
+- What was implemented
+  - Added per-project daily time totals with calendar durations and repo-derived estimates
+  - Introduced Core `TimeComputation` utility with `computeDailyProjectTimes`
+  - Added `TodayProjectTotalsView` to show "Today Totals" with breakdown `(cal X + repo Y)`
+- Files changed
+  - ActivityBarApp/Sources/Core/TimeComputation.swift (new)
+  - ActivityBarApp/Sources/App/MenuBarContentView.swift (today totals UI)
+  - ActivityBarApp/Tests/CoreTests/TimeComputationTests.swift (new tests)
+  - ActivityBarApp/AGENTS.md (document time computation patterns)
+  - ralph/prd.json (set ACTIVITY-063 passes: true)
+- **Learnings:**
+  - Calendar ground truth relies on explicit `endTimestamp`; skip all-day to avoid inflating totals
+  - Heuristic repo estimates keep 063 independent from full 064 implementation
+  - Use `UnifiedActivity.projectName` when available; fallback to provider label ensures grouping
+  - UI placement before activity list surfaces outcome metric without cluttering
+  - Test suite contains an unrelated brittle test with duplicate dictionary keys causing a runtime crash; unrelated to this change
+---
+
+## 2026-01-21 - ACTIVITY-064
+- What was implemented
+  - Added repository session grouping with a 45-minute inactivity window
+  - Computed per-session confidence (low for isolated, medium for grouped)
+  - Integrated sessions into daily totals by summing session minutes per project
+  - Kept estimates conservative using per-event heuristic minutes inside sessions
+- Files changed
+  - ActivityBarApp/Sources/Core/TimeComputation.swift
+  - ActivityBarApp/AGENTS.md
+  - ralph/prd.json
+- **Learnings:**
+  - Separate calendar vs repository paths: durations vs. estimates simplify reasoning
+  - Grouping by project name first avoids cross-project session bleed
+  - Conservative approach: sum per-event heuristics within a session preserves prior totals and test stability
+  - Confidence modeling can be internal-only until surfaced by UI (no API disruption)
+  - Swift synthesized Equatable fails when nested types aren’t Equatable; avoid unnecessary conformances
+---

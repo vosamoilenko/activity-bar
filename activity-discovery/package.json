@@ -1,0 +1,21 @@
+{
+  "name": "activity-discovery",
+  "version": "0.1.0",
+  "description": "Phase 1: Unified Activity Aggregation - API Discovery",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "run": "tsx src/run.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0",
+    "tsx": "^4.7.0"
+  },
+  "dependencies": {
+    "zod": "^3.22.0"
+  }
+}

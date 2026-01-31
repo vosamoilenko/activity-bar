@@ -1,0 +1,178 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ActivityBar PRD Schema",
+  "type": "object",
+  "required": ["schemaVersion", "branchName", "product"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string"
+    },
+    "branchName": {
+      "type": "string"
+    },
+    "product": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "platform": {"type": "string"},
+        "type": {"type": "string"},
+        "parentPRD": {"type": "string"},
+        "description": {"type": "string"},
+        "phase": {"type": "string"},
+        "scope": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "outOfScope": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "providers": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "constraints": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "inspiration": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "dependency": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "path": {"type": "string"},
+              "role": {"type": "string"},
+              "description": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "problem": {"type": "string"},
+        "sourceOfTruth": {"type": "string"},
+        "existingInfrastructure": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "repoBarKeyFiles": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "principles": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "designPatterns": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "dataContracts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "userStories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "acceptanceCriteria", "priority", "passes"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ACTIVITY-\\d{3}$"
+          },
+          "title": {"type": "string"},
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "passes": {"type": "boolean"},
+          "notes": {"type": "string"},
+          "codeReference": {"type": "string"}
+        }
+      }
+    },
+    "implementationOrder": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phase", "title", "stories"],
+        "properties": {
+          "phase": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {"type": "string"},
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^ACTIVITY-\\d{3}$"
+            }
+          }
+        }
+      }
+    },
+    "providerPlans": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "apiPreference": {
+            "type": "string",
+            "enum": ["graphql", "rest"]
+          },
+          "needs": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "technicalNotes": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "visualSpecifications": {
+      "type": "object",
+      "properties": {
+        "avatarSize": {"type": "object"},
+        "iconSize": {"type": "object"},
+        "spacing": {"type": "object"},
+        "typography": {"type": "object"},
+        "colors": {"type": "object"}
+      }
+    },
+    "nonGoalsForThisIteration": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "explicitDependencies": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "openQuestions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "outOfScope": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}
