@@ -215,7 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             debounceInterval: 30,
             onRefresh: { [weak coordinator] in
                 guard let coordinator = coordinator else { return }
-                await coordinator.refreshInBackground()
+                // Automatic scheduled refresh - only fetch today
+                await coordinator.refreshInBackground(isManual: false)
             }
         )
         refreshScheduler = scheduler

@@ -40,8 +40,12 @@ ActivityBar lives in your menu bar and shows a consolidated view of your recent 
 git clone https://github.com/yourusername/activity-bar.git
 cd activity-bar/ActivityBarApp
 
-# Build with Swift Package Manager
+# Run directly (no Xcode required)
+swift run ActivityBarApp
+
+# Or build for release and run
 swift build -c release
+.build/release/ActivityBarApp
 
 # Or open in Xcode
 open Package.swift
@@ -172,22 +176,46 @@ Cache is organized by day for efficient loading:
 
 ```bash
 cd ActivityBarApp
+
+# Debug build
 swift build
+
+# Release build (optimized)
+swift build -c release
 ```
+
+### Running
+
+```bash
+# Run directly without building separately
+swift run ActivityBarApp
+
+# Or run the built executable
+.build/debug/ActivityBarApp
+
+# Or run release build
+.build/release/ActivityBarApp
+```
+
+**Note**: No Xcode required - Swift Package Manager handles everything from the command line.
 
 ### Testing
 
 ```bash
 swift test
-```
 
-### Running in Debug
-
-```bash
-swift run ActivityBarApp
+# Run specific test target
+swift test --filter CoreTests
 ```
 
 For OAuth testing, create a `.env` file with your client credentials (see `.env.example`).
+
+### TL;DR
+
+Build, sign, and run (one command):
+```bash
+cd ActivityBarApp && swift build -c release && codesign -s - -f .build/release/ActivityBarApp && .build/release/ActivityBarApp
+```
 
 See [Development Guide](docs/development.md) for more details.
 

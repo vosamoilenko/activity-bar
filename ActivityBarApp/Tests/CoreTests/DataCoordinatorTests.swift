@@ -207,7 +207,7 @@ final class DataCoordinatorTests: XCTestCase {
         )
         let cache = InMemoryCacheProvider(
             accounts: [Account(id: "gl1", provider: .gitlab, displayName: "GitLab")],
-            activities: ["gh1": [oldActivity]],
+            activities: ["gl1": [oldActivity]],
             heatmap: [HeatMapBucket(date: "2026-01-18", count: 1)]
         )
 
@@ -231,13 +231,13 @@ final class DataCoordinatorTests: XCTestCase {
         await coordinator.loadFromCache()
 
         XCTAssertTrue(appState.hasLoadedFromCache)
-        XCTAssertEqual(appState.session.activitiesByAccount["gh1"]?.first?.id, "old1")
+        XCTAssertEqual(appState.session.activitiesByAccount["gl1"]?.first?.id, "old1")
         XCTAssertEqual(appState.session.heatmapBuckets.first?.date, "2026-01-18")
 
         // 2. Refresh in background
         await coordinator.refreshInBackground()
 
-        XCTAssertEqual(appState.session.activitiesByAccount["gh1"]?.first?.id, "new1")
+        XCTAssertEqual(appState.session.activitiesByAccount["gl1"]?.first?.id, "new1")
         XCTAssertEqual(appState.session.heatmapBuckets.first?.date, "2026-01-19")
         XCTAssertNotNil(appState.session.lastRefreshed)
     }
@@ -255,7 +255,7 @@ final class DataCoordinatorTests: XCTestCase {
         ]
         let cache = InMemoryCacheProvider(
             accounts: [Account(id: "gl1", provider: .gitlab, displayName: "GitLab")],
-            activities: ["gh1": cachedActivities],
+            activities: ["gl1": cachedActivities],
             heatmap: [HeatMapBucket(date: "2026-01-19", count: 3)]
         )
 
