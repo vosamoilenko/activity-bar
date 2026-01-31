@@ -24,7 +24,7 @@ final class ActivityListViewTests: XCTestCase {
         // Verify required fields
         XCTAssertEqual(activity.id, "test-1")
         XCTAssertEqual(activity.provider, .gitlab)
-        XCTAssertEqual(activity.accountId, "gh-account")
+        XCTAssertEqual(activity.accountId, "gl-account")
         XCTAssertEqual(activity.sourceId, "commit-123")
         XCTAssertEqual(activity.type, .commit)
 
@@ -65,9 +65,12 @@ final class ActivityListViewTests: XCTestCase {
         let mirror = Mirror(reflecting: activity)
         let propertyCount = mirror.children.count
 
-        // Fields: id, provider, accountId, sourceId, type, timestamp, title, summary, participants, url
-        // Extended in ACTIVITY-056: authorAvatarURL, labels, commentCount, isDraft, sourceRef, targetRef
-        XCTAssertEqual(propertyCount, 16, "UnifiedActivity should have exactly 16 fields (10 core + 6 UI extensions)")
+        // Fields: id, provider, accountId, sourceId, type, timestamp (6 core)
+        // Basic: title, summary, participants, url (4)
+        // UI-specific: authorAvatarURL, labels, commentCount, isDraft, sourceRef, targetRef, projectName, reviewers (8)
+        // Calendar: endTimestamp, isAllDay, attendees, calendarId (4)
+        // Tickets: linkedTickets (1)
+        XCTAssertEqual(propertyCount, 23, "UnifiedActivity should have exactly 23 fields (6 core + 4 basic + 8 UI + 4 calendar + 1 tickets)")
     }
 
     // MARK: - ActivityType Tests
@@ -116,16 +119,15 @@ final class ActivityListViewTests: XCTestCase {
         let activities = [
             createActivity(id: "1", provider: .gitlab),
             createActivity(id: "2", provider: .gitlab),
-            createActivity(id: "3", provider: .gitlab),
-            createActivity(id: "4", provider: .azureDevops)
+            createActivity(id: "3", provider: .azureDevops),
+            createActivity(id: "4", provider: .googleCalendar)
         ]
 
         let grouped = Dictionary(grouping: activities) { $0.provider }
 
         XCTAssertEqual(grouped[.gitlab]?.count, 2)
-        XCTAssertEqual(grouped[.gitlab]?.count, 1)
         XCTAssertEqual(grouped[.azureDevops]?.count, 1)
-        XCTAssertNil(grouped[.googleCalendar])
+        XCTAssertEqual(grouped[.googleCalendar]?.count, 1)
     }
 
     func testActivitiesCanBeGroupedByDay() {
@@ -212,15 +214,14 @@ final class ActivityListViewTests: XCTestCase {
     func testAllProvidersHaveDistinctIdentifiers() {
         let providers = Provider.allCases
 
-        XCTAssertEqual(providers.count, 4)
-        XCTAssertTrue(providers.contains(.gitlab))
+        XCTAssertEqual(providers.count, 3)
         XCTAssertTrue(providers.contains(.gitlab))
         XCTAssertTrue(providers.contains(.azureDevops))
         XCTAssertTrue(providers.contains(.googleCalendar))
 
         // Raw values should be distinct
         let rawValues = Set(providers.map { $0.rawValue })
-        XCTAssertEqual(rawValues.count, 4)
+        XCTAssertEqual(rawValues.count, 3)
     }
 
     func testProviderRawValuesMatchActivityDiscovery() {
@@ -310,8 +311,8 @@ final class ActivityListViewTests: XCTestCase {
         // JSON matching activity-discovery output format
         let json = """
         {
-            "id": "github:acc1:commit-abc123",
-            "provider": "github",
+            "id": "gitlab:acc1:commit-abc123",
+            "provider": "gitlab",
             "accountId": "acc1",
             "sourceId": "abc123",
             "type": "commit",
@@ -324,7 +325,7 @@ final class ActivityListViewTests: XCTestCase {
         let decoder = JSONDecoder()
         let activity = try decoder.decode(UnifiedActivity.self, from: json.data(using: .utf8)!)
 
-        XCTAssertEqual(activity.id, "github:acc1:commit-abc123")
+        XCTAssertEqual(activity.id, "gitlab:acc1:commit-abc123")
         XCTAssertEqual(activity.provider, .gitlab)
         XCTAssertEqual(activity.accountId, "acc1")
         XCTAssertEqual(activity.sourceId, "abc123")

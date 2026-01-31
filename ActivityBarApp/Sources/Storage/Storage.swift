@@ -762,9 +762,17 @@ public protocol TokenStore: Sendable {
 
 // MARK: - Keychain Token Store
 
-/// Keychain-backed implementation of TokenStore for secure multi-account token storage
+/// Single keychain item holding all account tokens as JSON
+/// This minimizes password prompts: 1 prompt to load all tokens at startup
+private struct TokenPair: Codable {
+    var access: String?
+    var refresh: String?
+}
+
+/// Keychain-backed implementation of TokenStore using a SINGLE keychain item for all tokens
+/// All tokens stored as JSON blob in one keychain entry, cached in memory for the session
 public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
-    /// Service name used to identify tokens in the keychain
+    /// Service name used to identify the single token blob in the keychain
     public let serviceName: String
 
     /// Access group for keychain sharing (nil for no sharing)
@@ -772,6 +780,14 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
 
     /// Queue for serializing keychain access
     private let queue = DispatchQueue(label: "com.activitybar.tokenstore", qos: .userInitiated)
+
+    /// In-memory cache of all tokens (loaded once from keychain)
+    /// Key: accountId (base, without :refresh suffix)
+    /// Value: TokenPair with access and refresh tokens
+    private var tokenCache: [String: TokenPair] = [:]
+
+    /// Whether the cache has been loaded from keychain
+    private var cacheLoaded = false
 
     /// Creates a new KeychainTokenStore
     /// - Parameters:
@@ -841,19 +857,14 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
 
     // MARK: - Synchronous Keychain Operations
 
-    /// Check if we're running in development (ad-hoc signed)
-    /// In development, we use the Data Protection Keychain which doesn't have
-    /// app-specific ACLs, avoiding password prompts when the app is re-signed
-    private var isDevelopmentBuild: Bool {
-        #if DEBUG
-        return true
-        #else
-        return false
-        #endif
-    }
+    /// Load all tokens from keychain into memory cache (called once)
+    /// This is the ONLY read from keychain - triggers one password prompt max
+    private func loadCacheIfNeeded() throws {
+        guard !cacheLoaded else { return }
 
-    private func getTokenSync(for accountId: String) throws -> String? {
-        var query = baseQuery(for: accountId)
+        print("[ActivityBar][Keychain] Loading all tokens from keychain (single item)...")
+
+        var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -861,177 +872,170 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
         if status == errSecItemNotFound {
-            // In development, also try to read from legacy keychain (without Data Protection)
-            // in case there are old tokens stored there
-            #if DEBUG
-            var legacyQuery = legacyBaseQuery(for: accountId)
-            legacyQuery[kSecReturnData as String] = true
-            legacyQuery[kSecMatchLimit as String] = kSecMatchLimitOne
-
-            var legacyResult: AnyObject?
-            let legacyStatus = SecItemCopyMatching(legacyQuery as CFDictionary, &legacyResult)
-
-            if legacyStatus == errSecSuccess,
-               let data = legacyResult as? Data,
-               let token = String(data: data, encoding: .utf8) {
-                // Migrate to new keychain format
-                try? setTokenSync(token, for: accountId)
-                // Delete from legacy
-                SecItemDelete(legacyQuery as CFDictionary)
-                return token
-            }
-            #endif
-            return nil
+            // No tokens stored yet, start with empty cache
+            print("[ActivityBar][Keychain] No tokens found in keychain, starting fresh")
+            tokenCache = [:]
+            cacheLoaded = true
+            return
         }
 
         guard status == errSecSuccess else {
             throw TokenStoreError.keychainError(status)
         }
 
-        guard let data = result as? Data,
-              let token = String(data: data, encoding: .utf8) else {
+        guard let data = result as? Data else {
             throw TokenStoreError.dataDecodingError
         }
 
-        return token
-    }
-
-    private func setTokenSync(_ token: String, for accountId: String) throws {
-        guard let tokenData = token.data(using: .utf8) else {
-            throw TokenStoreError.dataEncodingError
+        // Decode JSON blob
+        do {
+            tokenCache = try JSONDecoder().decode([String: TokenPair].self, from: data)
+            print("[ActivityBar][Keychain] Loaded \(tokenCache.count) accounts from keychain")
+        } catch {
+            print("[ActivityBar][Keychain] Failed to decode token cache: \(error)")
+            // Start fresh if corrupted
+            tokenCache = [:]
         }
 
-        // First try to update existing item
-        var updateQuery = baseQuery(for: accountId)
+        cacheLoaded = true
+    }
+
+    /// Save entire token cache to keychain (single write)
+    private func saveCacheToKeychain() throws {
+        print("[ActivityBar][Keychain] Saving \(tokenCache.count) accounts to keychain...")
+
+        let data = try JSONEncoder().encode(tokenCache)
+
+        let query = baseQuery()
+
+        // Try update first
         let updateAttributes: [String: Any] = [
-            kSecValueData as String: tokenData
+            kSecValueData as String: data
         ]
 
-        var updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
-        print("[ActivityBar][Keychain] SecItemUpdate status: \(updateStatus) (errSecSuccess=\(errSecSuccess), errSecItemNotFound=\(errSecItemNotFound))")
+        let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
 
         if updateStatus == errSecSuccess {
+            print("[ActivityBar][Keychain] Updated token cache successfully")
             return
         }
 
         if updateStatus == errSecItemNotFound {
             // Item doesn't exist, add it
-            var addQuery = baseQuery(for: accountId)
-            addQuery[kSecValueData as String] = tokenData
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-            var addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            print("[ActivityBar][Keychain] SecItemAdd status: \(addStatus)")
-
-            // Handle duplicate item error - delete and retry
-            if addStatus == errSecDuplicateItem {
-                print("[ActivityBar][Keychain] Duplicate item found, deleting and retrying...")
-                SecItemDelete(addQuery as CFDictionary)
-                addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-                print("[ActivityBar][Keychain] SecItemAdd retry status: \(addStatus)")
-            }
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
 
             guard addStatus == errSecSuccess else {
-                print("[ActivityBar][Keychain] ERROR: SecItemAdd failed with status \(addStatus)")
+                print("[ActivityBar][Keychain] Failed to add token cache: \(addStatus)")
                 throw TokenStoreError.keychainError(addStatus)
             }
+
+            print("[ActivityBar][Keychain] Created token cache successfully")
             return
         }
 
-        // Handle other update errors - try delete and add instead
-        print("[ActivityBar][Keychain] Update failed with status \(updateStatus), trying delete+add...")
-        let deleteStatus = SecItemDelete(updateQuery as CFDictionary)
-        print("[ActivityBar][Keychain] SecItemDelete status: \(deleteStatus)")
+        // Other error - try delete and recreate
+        print("[ActivityBar][Keychain] Update failed (\(updateStatus)), recreating...")
+        SecItemDelete(query as CFDictionary)
 
-        var addQuery = baseQuery(for: accountId)
-        addQuery[kSecValueData as String] = tokenData
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        print("[ActivityBar][Keychain] SecItemAdd after delete status: \(addStatus)")
 
         guard addStatus == errSecSuccess else {
-            print("[ActivityBar][Keychain] ERROR: SecItemAdd after delete failed with status \(addStatus)")
+            print("[ActivityBar][Keychain] Failed to recreate token cache: \(addStatus)")
             throw TokenStoreError.keychainError(addStatus)
         }
+
+        print("[ActivityBar][Keychain] Recreated token cache successfully")
+    }
+
+    /// Extract base account ID and token type from accountId
+    /// accountId can be: "provider:account" or "provider:account:refresh"
+    /// Returns: (baseAccountId, isRefreshToken)
+    private func parseAccountId(_ accountId: String) -> (base: String, isRefresh: Bool) {
+        if accountId.hasSuffix(":refresh") {
+            let base = String(accountId.dropLast(":refresh".count))
+            return (base, true)
+        }
+        return (accountId, false)
+    }
+
+    private func getTokenSync(for accountId: String) throws -> String? {
+        // Load cache from keychain if not already loaded
+        try loadCacheIfNeeded()
+
+        let (baseAccountId, isRefresh) = parseAccountId(accountId)
+
+        guard let pair = tokenCache[baseAccountId] else {
+            return nil
+        }
+
+        return isRefresh ? pair.refresh : pair.access
+    }
+
+    private func setTokenSync(_ token: String, for accountId: String) throws {
+        // Load cache from keychain if not already loaded
+        try loadCacheIfNeeded()
+
+        let (baseAccountId, isRefresh) = parseAccountId(accountId)
+
+        // Get or create token pair for this account
+        var pair = tokenCache[baseAccountId] ?? TokenPair()
+
+        // Update the appropriate token
+        if isRefresh {
+            pair.refresh = token
+        } else {
+            pair.access = token
+        }
+
+        // Update cache
+        tokenCache[baseAccountId] = pair
+
+        // Write entire cache back to keychain
+        try saveCacheToKeychain()
     }
 
     private func deleteTokenSync(for accountId: String) throws {
-        let query = baseQuery(for: accountId)
-        let status = SecItemDelete(query as CFDictionary)
+        // Load cache from keychain if not already loaded
+        try loadCacheIfNeeded()
 
-        // Also try to delete from legacy keychain
-        #if DEBUG
-        let legacyQuery = legacyBaseQuery(for: accountId)
-        SecItemDelete(legacyQuery as CFDictionary)
-        #endif
+        let (baseAccountId, isRefresh) = parseAccountId(accountId)
 
-        // errSecItemNotFound is acceptable for delete (idempotent)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw TokenStoreError.keychainError(status)
+        if isRefresh {
+            // Delete only the refresh token, keep access token
+            if var pair = tokenCache[baseAccountId] {
+                pair.refresh = nil
+                tokenCache[baseAccountId] = pair
+                try saveCacheToKeychain()
+            }
+        } else {
+            // Delete entire account (both access and refresh tokens)
+            tokenCache.removeValue(forKey: baseAccountId)
+            try saveCacheToKeychain()
         }
     }
 
     private func listAccountIdsSync() throws -> [String] {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll
-        ]
+        // Load cache from keychain if not already loaded
+        try loadCacheIfNeeded()
 
-        if let accessGroup = accessGroup {
-            query[kSecAttrAccessGroup as String] = accessGroup
-        }
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecItemNotFound {
-            return []
-        }
-
-        guard status == errSecSuccess else {
-            throw TokenStoreError.keychainError(status)
-        }
-
-        guard let items = result as? [[String: Any]] else {
-            return []
-        }
-
-        return items.compactMap { $0[kSecAttrAccount as String] as? String }
+        // Return all base account IDs from the cache
+        return Array(tokenCache.keys)
     }
 
-    /// Base query for keychain operations
-    /// In DEBUG builds, uses the Data Protection Keychain which doesn't have
-    /// app-specific Access Control Lists. This means tokens won't require
-    /// password prompts when the app is re-signed during development.
-    private func baseQuery(for accountId: String) -> [String: Any] {
+    /// Base query for the SINGLE keychain item holding all tokens
+    private func baseQuery() -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: accountId
-        ]
-
-        // Note: kSecUseDataProtectionKeychain requires proper developer signing
-        // and causes -34018 errors with ad-hoc signing, so we use the regular
-        // keychain instead. Use `security` CLI with -A flag to avoid ACL issues.
-
-        if let accessGroup = accessGroup {
-            query[kSecAttrAccessGroup as String] = accessGroup
-        }
-
-        return query
-    }
-
-    /// Legacy base query without Data Protection Keychain
-    /// Used for migrating tokens from old keychain format
-    #if DEBUG
-    private func legacyBaseQuery(for accountId: String) -> [String: Any] {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: accountId
+            kSecAttrAccount as String: "all-tokens"  // Single item for all accounts
         ]
 
         if let accessGroup = accessGroup {
@@ -1040,7 +1044,6 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
 
         return query
     }
-    #endif
 }
 
 // MARK: - Token Key Generation Helpers

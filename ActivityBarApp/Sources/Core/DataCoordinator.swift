@@ -403,9 +403,9 @@ public final class DataCoordinator {
     // MARK: - Background Refresh
 
     /// Refresh data from providers in background
-    /// New strategy: Fetch all visible heatmap days that are missing, plus today
-    public func refreshInBackground() async {
-        print("[ActivityBar][DataCoordinator] refreshInBackground called")
+    /// - Parameter isManual: If true, refetches yesterday and missing days. If false (automatic), only fetches today.
+    public func refreshInBackground(isManual: Bool = false) async {
+        print("[ActivityBar][DataCoordinator] refreshInBackground called (isManual: \(isManual))")
         print("[ActivityBar][DataCoordinator]   isRefreshing: \(isRefreshing)")
         print("[ActivityBar][DataCoordinator]   refreshProvider: \(refreshProvider != nil ? "set" : "nil")")
 
@@ -422,11 +422,13 @@ public final class DataCoordinator {
 
         // Use per-day refresh if available, otherwise fall back to full refresh
         if let perDayRefresher = perDayRefreshProvider {
-            await refreshVisibleDays(using: perDayRefresher, accounts: enabledAccounts)
+            await refreshVisibleDays(using: perDayRefresher, accounts: enabledAccounts, isManual: isManual)
         } else if let refresher = refreshProvider {
             await refreshAllDays(using: refresher, accounts: enabledAccounts)
         } else {
             print("[ActivityBar][DataCoordinator] ERROR: No refresh provider set!")
+            // Finish refresh even when no provider is available
+            appState.finishRefresh(error: "No refresh provider configured")
         }
 
         isRefreshing = false
@@ -441,26 +443,40 @@ public final class DataCoordinator {
     private let maxDaysPerBatch = 14
 
     /// Refresh all visible heatmap days using batch fetching
-    /// Strategy: Fetch last 2 days first, then older days in weekly batches in background
-    private func refreshVisibleDays(using refresher: PerDayRefreshProvider, accounts: [Account]) async {
-        // Get days that need fetching
-        let missingDays = await getMissingDays()
+    /// - Parameter isManual: If true, refetches yesterday and missing days. If false (automatic), only fetches today.
+    private func refreshVisibleDays(using refresher: PerDayRefreshProvider, accounts: [Account], isManual: Bool) async {
         let todayStr = todayDateString()
         let yesterdayStr = yesterdayDateString()
 
-        // Always include today and yesterday (priority days)
-        var allDaysToFetch = Set(missingDays)
-        allDaysToFetch.insert(todayStr)
-        allDaysToFetch.insert(yesterdayStr)
+        var allDaysToFetch = Set<String>()
+
+        if isManual {
+            // Manual refresh: Fetch today + yesterday + all missing days
+            print("[ActivityBar][DataCoordinator] Manual refresh: fetching today, yesterday, and missing days")
+            let missingDays = await getMissingDays()
+            allDaysToFetch = Set(missingDays)
+            allDaysToFetch.insert(todayStr)
+            allDaysToFetch.insert(yesterdayStr)
+        } else {
+            // Automatic refresh: ONLY fetch today (unless missing days exist)
+            print("[ActivityBar][DataCoordinator] Automatic refresh: fetching today only")
+            allDaysToFetch.insert(todayStr)
+
+            // Only fetch missing older days if there are actually missing days
+            let missingDays = await getMissingDays()
+            if !missingDays.isEmpty {
+                print("[ActivityBar][DataCoordinator] Found \(missingDays.count) missing older days, will fetch in background")
+            }
+        }
 
         let sortedDays = allDaysToFetch.sorted()
 
-        // Split into priority days (last 2) and background days (older)
+        // Split into priority days (today/yesterday) and background days (older)
         let priorityDays = sortedDays.filter { $0 >= yesterdayStr }
         let backgroundDays = sortedDays.filter { $0 < yesterdayStr }
 
-        print("[ActivityBar][DataCoordinator] Priority fetch: \(priorityDays.count) days (today + yesterday)")
-        print("[ActivityBar][DataCoordinator] Background fetch: \(backgroundDays.count) older days in \(maxDaysPerBatch)-day batches")
+        print("[ActivityBar][DataCoordinator] Priority fetch: \(priorityDays.count) days")
+        print("[ActivityBar][DataCoordinator] Background fetch: \(backgroundDays.count) older days")
 
         // Phase 1: Fetch priority days using batch method
         let errors = await fetchDateRangeBatch(days: priorityDays, using: refresher, accounts: accounts)
@@ -469,7 +485,8 @@ public final class DataCoordinator {
         finishRefresh(errors: errors)
 
         // Phase 2: Fetch older days in background using weekly batches (non-blocking)
-        if !backgroundDays.isEmpty {
+        // Only do this for manual refresh
+        if isManual && !backgroundDays.isEmpty {
             startBackgroundBatchFetch(days: backgroundDays, refresher: refresher, accounts: accounts)
         }
     }
@@ -644,7 +661,7 @@ public final class DataCoordinator {
     /// Manual refresh trigger (from UI)
     public func triggerRefresh() {
         Task {
-            await refreshInBackground()
+            await refreshInBackground(isManual: true)
         }
     }
 }

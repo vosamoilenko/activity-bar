@@ -60,18 +60,18 @@ final class AppStateTests: XCTestCase {
             sourceId: "s1", type: .commit, timestamp: Date()
         )
         let activity2 = UnifiedActivity(
-            id: "a2", provider: .gitlab, accountId: "gl1",
+            id: "a2", provider: .gitlab, accountId: "gl2",
             sourceId: "s2", type: .pullRequest, timestamp: Date()
         )
 
         let session = Session(
             accounts: [
-                Account(id: "gl1", provider: .gitlab, displayName: "GitLab", isEnabled: true),
-                Account(id: "gl1", provider: .gitlab, displayName: "GitLab", isEnabled: false)
+                Account(id: "gl1", provider: .gitlab, displayName: "GitLab 1", isEnabled: true),
+                Account(id: "gl2", provider: .gitlab, displayName: "GitLab 2", isEnabled: false)
             ],
             activitiesByAccount: [
-                "gh1": [activity1],
-                "gl1": [activity2]
+                "gl1": [activity1],
+                "gl2": [activity2]
             ]
         )
 
@@ -99,7 +99,7 @@ final class AppStateTests: XCTestCase {
 
         let session = Session(
             accounts: [Account(id: "gl1", provider: .gitlab, displayName: "GitLab")],
-            activitiesByAccount: ["gh1": [activityToday, activityYesterday, activityOld]]
+            activitiesByAccount: ["gl1": [activityToday, activityYesterday, activityOld]]
         )
 
         let range = DateRange(start: yesterday, end: now.addingTimeInterval(1))
@@ -130,7 +130,7 @@ final class AppStateTests: XCTestCase {
 
         let session = Session(
             accounts: [Account(id: "gl1", provider: .gitlab, displayName: "GitLab")],
-            activitiesByAccount: ["gh1": [activity1, activity2, activity3]]
+            activitiesByAccount: ["gl1": [activity1, activity2, activity3]]
         )
 
         let range = DateRange(start: earliest.addingTimeInterval(-1), end: now.addingTimeInterval(1))
@@ -205,25 +205,25 @@ final class AppStateTests: XCTestCase {
         appState.addAccount(account)
 
         XCTAssertEqual(appState.session.accounts.count, 1)
-        XCTAssertEqual(appState.session.accounts.first?.id, "gh1")
+        XCTAssertEqual(appState.session.accounts.first?.id, "gl1")
     }
 
     func testAppStateRemoveAccount() {
         let appState = AppState(session: Session(accounts: [
-            Account(id: "gl1", provider: .gitlab, displayName: "GitLab"),
-            Account(id: "gl1", provider: .gitlab, displayName: "GitLab")
+            Account(id: "gl1", provider: .gitlab, displayName: "GitLab 1"),
+            Account(id: "gl2", provider: .gitlab, displayName: "GitLab 2")
         ]))
 
         appState.removeAccount(id: "gl1")
 
         XCTAssertEqual(appState.session.accounts.count, 1)
-        XCTAssertEqual(appState.session.accounts.first?.id, "gl1")
+        XCTAssertEqual(appState.session.accounts.first?.id, "gl2")
     }
 
     func testAppStateRemoveAccountClearsActivities() {
         let appState = AppState(session: Session(
             accounts: [Account(id: "gl1", provider: .gitlab, displayName: "GitLab")],
-            activitiesByAccount: ["gh1": [
+            activitiesByAccount: ["gl1": [
                 UnifiedActivity(id: "a1", provider: .gitlab, accountId: "gl1",
                               sourceId: "s1", type: .commit, timestamp: Date())
             ]]
@@ -231,7 +231,7 @@ final class AppStateTests: XCTestCase {
 
         appState.removeAccount(id: "gl1")
 
-        XCTAssertNil(appState.session.activitiesByAccount["gh1"])
+        XCTAssertNil(appState.session.activitiesByAccount["gl1"])
     }
 
     func testAppStateToggleAccount() {
@@ -283,11 +283,11 @@ final class AppStateTests: XCTestCase {
         let appState = AppState()
 
         let buckets1 = [
-            HeatMapBucket(date: "2026-01-19", count: 5, breakdown: [.gitlab: 5]),
+            HeatMapBucket(date: "2026-01-19", count: 5, breakdown: [.gitlab: 3, .azureDevops: 2]),
             HeatMapBucket(date: "2026-01-18", count: 3, breakdown: [.gitlab: 3])
         ]
         let buckets2 = [
-            HeatMapBucket(date: "2026-01-19", count: 3, breakdown: [.gitlab: 3]),
+            HeatMapBucket(date: "2026-01-19", count: 5, breakdown: [.gitlab: 2, .googleCalendar: 3]),
             HeatMapBucket(date: "2026-01-17", count: 2, breakdown: [.gitlab: 2])
         ]
 
@@ -296,9 +296,10 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.session.heatmapBuckets.count, 3)
 
         let jan19 = appState.session.heatmapBuckets.first { $0.date == "2026-01-19" }
-        XCTAssertEqual(jan19?.count, 8)
-        XCTAssertEqual(jan19?.breakdown?[.gitlab], 5)
-        XCTAssertEqual(jan19?.breakdown?[.gitlab], 3)
+        XCTAssertEqual(jan19?.count, 10)  // 5 + 5
+        XCTAssertEqual(jan19?.breakdown?[.gitlab], 5)  // 3 + 2
+        XCTAssertEqual(jan19?.breakdown?[.azureDevops], 2)
+        XCTAssertEqual(jan19?.breakdown?[.googleCalendar], 3)
     }
 
     func testAppStateSelectDate() {

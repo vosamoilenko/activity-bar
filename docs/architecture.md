@@ -100,14 +100,17 @@ The Storage layer handles persistence:
 
 | Component | Responsibility |
 |-----------|----------------|
-| `Storage.swift` | Disk cache protocols and implementations |
+| `Storage.swift` | Disk cache and keychain token storage |
 | `ProjectStore.swift` | Project graph persistence |
 
 **Key Characteristics:**
 - Protocol-driven (enables testing with mocks)
 - JSON serialization with ISO8601 dates
 - Per-day file organization for activities
+- Single-item keychain storage for all tokens (minimizes password prompts)
 - Thread-safe with DispatchQueue
+
+**See Also:** [Keychain Storage](keychain.md) for detailed token management documentation
 
 ## Application Lifecycle
 

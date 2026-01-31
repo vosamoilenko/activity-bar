@@ -466,7 +466,7 @@ final class DiskActivityCacheTests: XCTestCase {
         let loaded = await cache.loadAccounts()
 
         XCTAssertEqual(loaded.count, 2)
-        XCTAssertEqual(loaded[0].id, "gh-1")
+        XCTAssertEqual(loaded[0].id, "gl-1")
         XCTAssertEqual(loaded[1].host, "gitlab.company.com")
     }
 
@@ -499,13 +499,13 @@ final class DiskActivityCacheTests: XCTestCase {
 
         XCTAssertNotNil(loaded)
         XCTAssertEqual(loaded?.count, 1)
-        XCTAssertEqual(loaded?[0].id, "gh-1:commit-123")
+        XCTAssertEqual(loaded?[0].id, "gl-1:commit-123")
     }
 
     func testLoadAllActivities() async {
         // Save accounts first
-        let account1 = Account(id: "gl-1", provider: .gitlab, displayName: "GitLab")
-        let account2 = Account(id: "gl-1", provider: .gitlab, displayName: "GitLab")
+        let account1 = Account(id: "gl-1", provider: .gitlab, displayName: "GitLab 1")
+        let account2 = Account(id: "gl-2", provider: .gitlab, displayName: "GitLab 2")
         await cache.saveAccounts([account1, account2])
 
         // Save activities for both
@@ -517,14 +517,14 @@ final class DiskActivityCacheTests: XCTestCase {
         ], for: account1, from: from, to: to)
 
         await cache.saveActivities([
-            UnifiedActivity(id: "2", provider: .gitlab, accountId: "gl-1", sourceId: "2", type: .pullRequest, timestamp: Date())
+            UnifiedActivity(id: "2", provider: .gitlab, accountId: "gl-2", sourceId: "2", type: .pullRequest, timestamp: Date())
         ], for: account2, from: from, to: to)
 
         let allActivities = await cache.loadAllActivities()
 
         XCTAssertEqual(allActivities.count, 2)
-        XCTAssertNotNil(allActivities["gh-1"])
         XCTAssertNotNil(allActivities["gl-1"])
+        XCTAssertNotNil(allActivities["gl-2"])
     }
 
     // MARK: - Heatmap Tests
@@ -546,17 +546,17 @@ final class DiskActivityCacheTests: XCTestCase {
 
     func testLoadAllHeatmapsMergesBuckets() async {
         // Save accounts
-        let account1 = Account(id: "gl-1", provider: .gitlab, displayName: "GitLab")
-        let account2 = Account(id: "gl-1", provider: .gitlab, displayName: "GitLab")
+        let account1 = Account(id: "gl-1", provider: .gitlab, displayName: "GitLab 1")
+        let account2 = Account(id: "gl-2", provider: .azureDevops, displayName: "Azure DevOps")
         await cache.saveAccounts([account1, account2])
 
-        // Save overlapping heatmaps
+        // Save overlapping heatmaps with different providers
         await cache.saveHeatmap([
             HeatMapBucket(date: "2024-01-01", count: 5, breakdown: [.gitlab: 5])
         ], for: account1)
 
         await cache.saveHeatmap([
-            HeatMapBucket(date: "2024-01-01", count: 3, breakdown: [.gitlab: 3])
+            HeatMapBucket(date: "2024-01-01", count: 3, breakdown: [.azureDevops: 3])
         ], for: account2)
 
         let merged = await cache.loadAllHeatmaps()
@@ -564,7 +564,7 @@ final class DiskActivityCacheTests: XCTestCase {
         XCTAssertEqual(merged.count, 1) // Same date merged
         XCTAssertEqual(merged[0].count, 8) // 5 + 3
         XCTAssertEqual(merged[0].breakdown?[.gitlab], 5)
-        XCTAssertEqual(merged[0].breakdown?[.gitlab], 3)
+        XCTAssertEqual(merged[0].breakdown?[.azureDevops], 3)
     }
 
     // MARK: - Clear Cache Tests
@@ -587,7 +587,7 @@ final class DiskActivityCacheTests: XCTestCase {
         XCTAssertNotNil(loadedHeatmap)
 
         // Clear cache for account
-        await cache.clearCache(for: "gh-1")
+        await cache.clearCache(for: "gl-1")
 
         // Verify data is gone
         let clearedHeatmap = await cache.loadHeatmap(for: account)
