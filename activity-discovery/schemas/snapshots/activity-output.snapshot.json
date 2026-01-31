@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ActivityOutput",
+  "description": "Output format from the CLI runner",
+  "type": "object",
+  "required": ["activities", "heatmap"],
+  "properties": {
+    "activities": {
+      "type": "array",
+      "items": { "$ref": "./unified-activity.snapshot.json" },
+      "description": "Normalized activities from all requested providers/accounts"
+    },
+    "heatmap": {
+      "type": "array",
+      "items": { "$ref": "./heatmap-bucket.snapshot.json" },
+      "description": "Aggregated heatmap data"
+    }
+  },
+  "additionalProperties": false
+}

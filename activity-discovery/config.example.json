@@ -1,0 +1,72 @@
+{
+  "providers": {
+    "github": {
+      "accounts": [
+        {
+          "id": "github-personal",
+          "token": "<GITHUB_PERSONAL_ACCESS_TOKEN>",
+          "description": "Personal GitHub account"
+        },
+        {
+          "id": "github-work",
+          "token": "<GITHUB_WORK_ACCESS_TOKEN>",
+          "description": "Work GitHub account"
+        }
+      ]
+    },
+    "gitlab": {
+      "accounts": [
+        {
+          "id": "gitlab-cloud",
+          "baseUrl": "https://gitlab.com",
+          "token": "<GITLAB_PERSONAL_ACCESS_TOKEN>",
+          "description": "GitLab.com account"
+        },
+        {
+          "id": "gitlab-self-hosted",
+          "baseUrl": "https://gitlab.your-company.com",
+          "token": "<GITLAB_SELF_HOSTED_TOKEN>",
+          "description": "Self-hosted GitLab instance"
+        }
+      ]
+    },
+    "azure-devops": {
+      "accounts": [
+        {
+          "id": "azure-org1",
+          "organization": "<AZURE_ORGANIZATION>",
+          "projects": ["<PROJECT_1>", "<PROJECT_2>"],
+          "token": "<AZURE_DEVOPS_PAT>",
+          "description": "Azure DevOps organization"
+        }
+      ]
+    },
+    "google-calendar": {
+      "accounts": [
+        {
+          "id": "google-personal",
+          "credentials": {
+            "clientId": "<GOOGLE_CLIENT_ID>",
+            "clientSecret": "<GOOGLE_CLIENT_SECRET>",
+            "refreshToken": "<GOOGLE_REFRESH_TOKEN>"
+          },
+          "calendarIds": ["primary", "<SECONDARY_CALENDAR_ID>"],
+          "description": "Personal Google account"
+        },
+        {
+          "id": "google-work",
+          "credentials": {
+            "clientId": "<GOOGLE_CLIENT_ID>",
+            "clientSecret": "<GOOGLE_CLIENT_SECRET>",
+            "refreshToken": "<GOOGLE_REFRESH_TOKEN>"
+          },
+          "calendarIds": ["primary"],
+          "description": "Work Google account"
+        }
+      ]
+    }
+  },
+  "fetchWindow": {
+    "daysBack": 30
+  }
+}
