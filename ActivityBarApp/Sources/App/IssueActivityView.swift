@@ -59,6 +59,11 @@ struct IssueActivityView: View {
                 if let labels = activity.labels, !labels.isEmpty {
                     MenuLabelChipsView(labels: labels)
                 }
+
+                // Linked tickets (if any)
+                if let tickets = activity.linkedTickets, !tickets.isEmpty {
+                    TicketChipsView(tickets: tickets)
+                }
             }
         }
     }

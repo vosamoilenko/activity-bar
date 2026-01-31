@@ -316,6 +316,26 @@ struct AccountRowView: View {
                     }
                     .buttonStyle(.plain)
                     .help(hasCalendarFiltering ? "\(enabledCalendarsCount) calendars selected" : "Configure calendars")
+
+                    // Show Only Accepted Events toggle
+                    Button {
+                        appState.toggleShowOnlyAcceptedEvents(for: account.id)
+                    } label: {
+                        Image(systemName: account.showOnlyAcceptedEvents ? "checkmark.circle.fill" : "checkmark.circle")
+                            .foregroundStyle(account.showOnlyAcceptedEvents ? .blue : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(account.showOnlyAcceptedEvents ? "Showing only accepted events" : "Showing all events")
+
+                    // Hide All-Day Events toggle
+                    Button {
+                        appState.toggleHideAllDayEvents(for: account.id)
+                    } label: {
+                        Image(systemName: account.hideAllDayEvents ? "calendar.badge.minus" : "calendar.badge.clock")
+                            .foregroundStyle(account.hideAllDayEvents ? .blue : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(account.hideAllDayEvents ? "All-day events hidden" : "Showing all-day events")
                 }
 
                 // Event types configuration button

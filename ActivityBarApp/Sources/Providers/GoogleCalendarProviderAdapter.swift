@@ -42,6 +42,16 @@ public final class GoogleCalendarProviderAdapter: ProviderAdapter, Sendable {
                     // This filters out events from shared calendars where user isn't involved
                     guard isUserAttendee(event) else { continue }
 
+                    // Apply response status filter if enabled
+                    if account.showOnlyAcceptedEvents {
+                        guard shouldIncludeBasedOnResponseStatus(event) else { continue }
+                    }
+
+                    // Apply all-day event filter if enabled
+                    if account.hideAllDayEvents {
+                        guard !isAllDayEvent(event) else { continue }
+                    }
+
                     if let activity = normalizeEvent(event, accountId: account.id, calendarId: calendarId) {
                         activities.append(activity)
                     }
@@ -76,6 +86,34 @@ public final class GoogleCalendarProviderAdapter: ProviderAdapter, Sendable {
 
         // Check if the current user is in the attendees list
         return attendees.contains { $0.selfAttendee == true }
+    }
+
+    /// Check if event should be included based on response status filter
+    /// Returns true if the event should be shown when showOnlyAcceptedEvents is enabled
+    private func shouldIncludeBasedOnResponseStatus(_ event: CalendarEvent) -> Bool {
+        // Events without attendees are personal events - always show
+        guard let attendees = event.attendees, !attendees.isEmpty else {
+            return true
+        }
+
+        // Find the current user's attendee record
+        guard let userAttendee = attendees.first(where: { $0.selfAttendee == true }) else {
+            return true  // No user attendee found (shouldn't happen)
+        }
+
+        // If no response status, assume it's important (e.g., organizer's event)
+        guard let status = userAttendee.responseStatus else {
+            return true
+        }
+
+        // Only show if status is "accepted"
+        return status == "accepted"
+    }
+
+    /// Check if an event is an all-day event
+    /// All-day events have a date but no dateTime
+    private func isAllDayEvent(_ event: CalendarEvent) -> Bool {
+        return event.start.date != nil && event.start.dateTime == nil
     }
 
     public func fetchHeatmap(for account: Account, token: String, from: Date, to: Date) async throws -> [HeatMapBucket] {
@@ -113,12 +151,14 @@ public final class GoogleCalendarProviderAdapter: ProviderAdapter, Sendable {
         let displayName: String?
         let organizer: Bool?
         let selfAttendee: Bool?
+        let responseStatus: String?  // "accepted", "declined", "tentative", "needsAction"
 
         private enum CodingKeys: String, CodingKey {
             case email
             case displayName
             case organizer
             case selfAttendee = "self"
+            case responseStatus
         }
     }
 
