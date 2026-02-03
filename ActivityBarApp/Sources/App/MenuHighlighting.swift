@@ -11,6 +11,16 @@ private struct ShowEventAuthorKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// Environment key for showing raw event type (debugging)
+private struct ShowEventTypeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+/// Environment key for showing branch info
+private struct ShowEventBranchKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 extension EnvironmentValues {
     /// Whether the current menu item is highlighted/selected
     var menuItemHighlighted: Bool {
@@ -22,6 +32,18 @@ extension EnvironmentValues {
     var showEventAuthor: Bool {
         get { self[ShowEventAuthorKey.self] }
         set { self[ShowEventAuthorKey.self] = newValue }
+    }
+
+    /// Whether to show raw event type (for debugging)
+    var showEventType: Bool {
+        get { self[ShowEventTypeKey.self] }
+        set { self[ShowEventTypeKey.self] = newValue }
+    }
+
+    /// Whether to show branch info (commit branch, MR source/target)
+    var showEventBranch: Bool {
+        get { self[ShowEventBranchKey.self] }
+        set { self[ShowEventBranchKey.self] = newValue }
     }
 }
 

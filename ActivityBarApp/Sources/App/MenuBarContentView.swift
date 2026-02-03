@@ -294,6 +294,8 @@ struct MenuBarContentView: View {
                 }
             )
             .environment(\.showEventAuthor, preferencesManager?.showEventAuthor ?? false)
+            .environment(\.showEventType, preferencesManager?.showEventType ?? false)
+            .environment(\.showEventBranch, preferencesManager?.showEventBranch ?? true)
 
             if activities.count > 30 {
                 Text("+\(activities.count - 30) more activities")

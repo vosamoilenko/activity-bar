@@ -1078,31 +1078,19 @@ struct AddAccountSheet: View {
     /// Selected provider
     @State private var selectedProvider: Provider = .gitlab
 
-    /// Authentication method
-    private enum AuthMethod: String, CaseIterable {
-        case oauth = "OAuth"
-        case pat = "Personal Access Token"
-    }
-    @State private var authMethod: AuthMethod = .oauth  // Default to OAuth
-
-    /// Personal Access Token input
+    /// Personal Access Token input (Azure DevOps only)
     @State private var patInput: String = ""
 
-    /// Host for self-hosted instances (GitLab)
+    /// Host for self-hosted instances (GitLab only)
     /// Loaded from ACTIVITYBAR_DEFAULT_GITLAB_HOST environment variable for development convenience
     @State private var customHost: String = ProcessInfo.processInfo.environment["ACTIVITYBAR_DEFAULT_GITLAB_HOST"] ?? ""
 
-    /// Whether to show custom host field
+    /// Whether to show custom host field (GitLab only)
     private var showCustomHost: Bool {
         selectedProvider == .gitlab
     }
 
-    /// Whether PAT auth is available for the selected provider
-    private var supportsPAT: Bool {
-        selectedProvider == .gitlab || selectedProvider == .azureDevops
-    }
-
-    // Azure DevOps specific fields
+    // Azure DevOps specific fields (PAT only, no OAuth)
     @State private var azureOrganization: String = ""
     @State private var azureProjectsText: String = ""
     private var showAzureFields: Bool { selectedProvider == .azureDevops }
@@ -1143,10 +1131,6 @@ struct AddAccountSheet: View {
                 }
                 .pickerStyle(.radioGroup)
                 .onChange(of: selectedProvider) { _, newValue in
-                    // Reset auth method when switching providers
-                    if newValue == .googleCalendar {
-                        authMethod = .oauth
-                    }
                     // Try applying Azure prefill when switching to Azure
                     if newValue == .azureDevops {
                         applyAzurePrefillIfAvailable()
@@ -1154,32 +1138,17 @@ struct AddAccountSheet: View {
                 }
             }
 
-            // Auth method selection (for providers that support PAT)
-            if supportsPAT && googlePhase == .idle {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Authentication Method")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Picker("Method", selection: $authMethod) {
-                        Text("Personal Access Token").tag(AuthMethod.pat)
-                        Text("OAuth (Browser)").tag(AuthMethod.oauth)
-                    }
-                    .pickerStyle(.segmented)
-                }
-            }
-
-            // PAT input field
-            if supportsPAT && authMethod == .pat && googlePhase == .idle {
+            // Azure DevOps PAT input (Azure uses PAT only, no OAuth)
+            if showAzureFields && googlePhase == .idle {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Personal Access Token")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    SecureField("ghp_xxxx or glpat-xxxx", text: $patInput)
+                    SecureField("Enter your Azure DevOps PAT", text: $patInput)
                         .textFieldStyle(.roundedBorder)
 
-                    Text(patHelpText)
+                    Text("Generate at: Azure DevOps → User Settings → Personal access tokens")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -1297,11 +1266,13 @@ struct AddAccountSheet: View {
                     Button("Add Account") { completeGoogleSelection() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(googleSelectedIds.isEmpty || loginState.isInProgress)
-                } else if supportsPAT && authMethod == .pat {
+                } else if selectedProvider == .azureDevops {
+                    // Azure DevOps uses PAT authentication
                     Button("Add Account") { startPATLogin() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(patInput.trimmingCharacters(in: .whitespaces).isEmpty || loginState.isInProgress)
                 } else {
+                    // GitLab and Google Calendar use OAuth
                     Button("Sign In...") { startOAuthFlow() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(loginState.isInProgress)
@@ -1324,10 +1295,11 @@ struct AddAccountSheet: View {
             return 430
         }
         var height: CGFloat = 280  // Base height
-        if supportsPAT { height += 50 }  // Auth method picker
-        if supportsPAT && authMethod == .pat { height += 80 }  // PAT input
-        if showCustomHost { height += 80 }  // Custom host field
-        if showAzureFields { height += 80 }  // Azure fields
+        if showCustomHost { height += 80 }  // GitLab custom host field
+        if showAzureFields {
+            height += 80  // Azure PAT input
+            height += 80  // Azure org/projects fields
+        }
         return height
     }
 
@@ -1360,18 +1332,7 @@ struct AddAccountSheet: View {
         }
     }
 
-    private var patHelpText: String {
-        switch selectedProvider {
-        case .gitlab:
-            return "Generate at: GitLab → Preferences → Access Tokens (scopes: read_api, read_user)"
-        case .azureDevops:
-            return "Generate at: Azure DevOps → User Settings → Personal access tokens"
-        default:
-            return ""
-        }
-    }
-
-    /// Start PAT-based login for selected provider
+    /// Start PAT-based login for Azure DevOps
     private func startPATLogin() {
         print("[ActivityBar][AddAccount] startPATLogin called for \(selectedProvider)")
         validationError = nil
@@ -1438,59 +1399,13 @@ struct AddAccountSheet: View {
         }
     }
 
-    /// Validate PAT by fetching user info from the provider's API
+    /// Validate PAT by fetching user info from Azure DevOps API (Azure only)
     private func validatePATAndGetUserInfo(token: String) async throws -> OAuthResult {
-        switch selectedProvider {
-        case .gitlab:
-            return try await validateGitLabPAT(token: token)
-        case .azureDevops:
-            return try await validateAzureDevOpsPAT(token: token)
-        default:
+        // Only Azure DevOps uses PAT authentication
+        guard selectedProvider == .azureDevops else {
             throw OAuthError.configurationError("PAT not supported for \(selectedProvider)")
         }
-    }
-
-    private func validateGitLabPAT(token: String) async throws -> OAuthResult {
-        print("[ActivityBar][PAT] Validating GitLab PAT...")
-        print("[ActivityBar][PAT] Token prefix: \(String(token.prefix(10)))...")
-
-        let baseURL = customHost.isEmpty ? "https://gitlab.com" : customHost
-        let url = URL(string: "\(baseURL)/api/v4/user")!
-        var request = URLRequest(url: url)
-        request.setValue(token, forHTTPHeaderField: "PRIVATE-TOKEN")
-
-        print("[ActivityBar][PAT] Sending request to \(url)")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            print("[ActivityBar][PAT] ERROR: Invalid response type")
-            throw OAuthError.networkError("Invalid response")
-        }
-        print("[ActivityBar][PAT] Response status: \(http.statusCode)")
-
-        if http.statusCode == 401 {
-            print("[ActivityBar][PAT] ERROR: 401 Unauthorized")
-            throw OAuthError.authorizationFailed("Invalid token - please check your PAT")
-        }
-        guard (200...299).contains(http.statusCode) else {
-            print("[ActivityBar][PAT] ERROR: HTTP \(http.statusCode)")
-            throw OAuthError.networkError("HTTP \(http.statusCode)")
-        }
-
-        struct GitLabUser: Decodable {
-            let username: String
-            let name: String?
-            let id: Int
-        }
-        let user = try JSONDecoder().decode(GitLabUser.self, from: data)
-        print("[ActivityBar][PAT] GitLab user: \(user.username) (name: \(user.name ?? "nil"))")
-
-        return OAuthResult(
-            provider: .gitlab,
-            accessToken: token,
-            accountId: user.username,
-            displayName: user.name ?? user.username,
-            host: customHost.isEmpty ? nil : customHost
-        )
+        return try await validateAzureDevOpsPAT(token: token)
     }
 
     private func validateAzureDevOpsPAT(token: String) async throws -> OAuthResult {
@@ -1777,6 +1692,22 @@ struct GeneralSettingsView: View {
                         set: { prefs.showEventAuthor = $0 }
                     ))
                     Text("Display the author/owner of each event for debugging")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Show Event Type", isOn: Binding(
+                        get: { prefs.showEventType },
+                        set: { prefs.showEventType = $0 }
+                    ))
+                    Text("Display the raw event type from provider (e.g., \"pushed to\", \"merged\")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Show Branch Info", isOn: Binding(
+                        get: { prefs.showEventBranch },
+                        set: { prefs.showEventBranch = $0 }
+                    ))
+                    Text("Display commit branches and merge request source/target")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -2089,4 +2020,3 @@ private final class PreviewTokenStore: TokenStore, @unchecked Sendable {
         tokenStore: PreviewTokenStore()
     )
 }
-

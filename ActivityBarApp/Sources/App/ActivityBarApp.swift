@@ -228,10 +228,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Only trigger immediate refresh if any visible days need fetching
         let needsRefresh = await coordinator.needsInitialFetch()
         if needsRefresh {
-            print("[ActivityBar] Some heatmap days need fetching, triggering refresh")
+            print("[ActivityBar] Some heatmap days need fetching, triggering manual refresh")
             Task.detached { @MainActor in
                 try? await Task.sleep(for: .milliseconds(100))
-                scheduler.triggerRefresh()
+                // Use isManual: true to fetch all missing days, not just today
+                await coordinator.refreshInBackground(isManual: true)
             }
         } else {
             print("[ActivityBar] All heatmap days cached, skipping initial refresh")
@@ -239,8 +240,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Trigger manual refresh from UI
+    /// Uses isManual: true to fetch today, yesterday, and all missing days
     func triggerRefresh() {
-        refreshScheduler?.forceRefresh()
+        Task { @MainActor in
+            await dataCoordinator?.refreshInBackground(isManual: true)
+        }
     }
 
     /// Update panel appearance in real-time (called from settings)
