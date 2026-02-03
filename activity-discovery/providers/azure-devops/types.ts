@@ -47,6 +47,8 @@ export interface AzurePullRequest {
   creationDate: string;
   closedDate?: string;
   status: 'active' | 'abandoned' | 'completed';
+  sourceRefName?: string;
+  targetRefName?: string;
   createdBy: {
     id: string;
     displayName: string;
@@ -80,6 +82,21 @@ export interface AzureCommit {
   };
   url: string;
   remoteUrl: string;
+}
+
+/**
+ * Azure DevOps Push (minimal fields for branch mapping)
+ * https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pushes/get-pushes
+ */
+export interface AzurePush {
+  pushId?: number;
+  date?: string;
+  refUpdates?: Array<{
+    name?: string;
+  }>;
+  commits?: Array<{
+    commitId: string;
+  }>;
 }
 
 /**

@@ -21,24 +21,38 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             throw ProviderError.configurationError("Azure DevOps requires organization")
         }
 
+        ActivityLogger.shared.log("Azure", "Fetching activities for \(organization) (\(DateFormatting.dateString(from: from)) to \(DateFormatting.dateString(from: to)))")
+
         // Get current authenticated user
         let currentUser = try await fetchCurrentUser(organization: organization, token: token)
+        ActivityLogger.shared.log("Azure", "User: \(currentUser.displayName) (email=\(currentUser.email.isEmpty ? "N/A" : currentUser.email))")
 
         // Discover projects for this organization
         let projects = try await fetchProjects(organization: organization, token: token)
         if projects.isEmpty {
+            ActivityLogger.shared.log("Azure", "No projects found")
             return []
         }
+        ActivityLogger.shared.log("Azure", "Found \(projects.count) projects")
 
         let minDate = DateFormatting.iso8601String(from: from)
         let maxDate = DateFormatting.iso8601String(from: to)
 
         var activities: [UnifiedActivity] = []
+        var totalPRs = 0
+        var totalCommits = 0
+        var totalWorkItems = 0
 
         // Limit number of projects to avoid excessive requests
         for project in projects.prefix(10) {
+            var projectPRs = 0
+            var projectCommits = 0
+            var projectWorkItems = 0
+
             // Pull Requests (filter by current user as creator)
             if let prs = try? await fetchPullRequests(organization: organization, project: project.name, token: token, minDate: minDate, maxDate: maxDate, creatorId: currentUser.id) {
+                projectPRs = prs.count
+
                 // Fetch linked work items for each PR
                 var prWorkItemsMap: [Int: [AzureWorkItem]] = [:]
                 for pr in prs {
@@ -60,52 +74,127 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             }
 
             // Commits per repository (limit repos to avoid over-fetch)
+            // Collect commits first, then batch-validate extracted ticket IDs
+            var pendingCommits: [(commit: AzureCommit, repoName: String, branchName: String?)] = []
+
             if let repos = try? await fetchRepositories(organization: organization, project: project.name, token: token) {
                 for repo in repos.prefix(10) {
-                    let pushBranchMap = (try? await fetchPushes(
+                    // Fetch pushes for branch mapping
+                    var pushBranchMap: [String: String] = [:]
+                    if let pushes = try? await fetchPushes(
                         organization: organization,
                         project: project.name,
                         repoId: repo.id,
                         token: token,
                         minDate: minDate,
                         maxDate: maxDate
-                    ))
-                    .map { mapCommitBranches(from: $0) } ?? [:]
-
-                    if let commits = try? await fetchCommits(
-                        organization: organization,
-                        project: project.name,
-                        repoId: repo.id,
-                        token: token,
-                        minDate: minDate,
-                        maxDate: maxDate,
-                        authorEmail: currentUser.email
                     ) {
-                        for commit in commits {
-                            let branchName = pushBranchMap[commit.commitId.lowercased()]
-                            activities.append(normalizeCommit(
-                                commit,
-                                accountId: account.id,
-                                organization: organization,
-                                project: project.name,
-                                repoName: repo.name,
-                                branchName: branchName
-                            ))
+                        pushBranchMap = mapCommitBranches(from: pushes)
+                        if !pushBranchMap.isEmpty {
+                            // Log the branches found
+                            let uniqueBranches = Set(pushBranchMap.values)
+                            ActivityLogger.shared.log("Azure", "[\(repo.name)] Push branches: \(uniqueBranches.joined(separator: ", "))")
                         }
+                    }
+
+                    do {
+                        let commits = try await fetchCommits(
+                            organization: organization,
+                            project: project.name,
+                            repoId: repo.id,
+                            token: token,
+                            minDate: minDate,
+                            maxDate: maxDate
+                        )
+                        ActivityLogger.shared.log("Azure", "[\(repo.name)] Got \(commits.count) commits")
+                        // Don't filter by author - just like TypeScript version
+                        // Users only see repos they have access to anyway
+                        for commit in commits {
+                            let commitIdLower = commit.commitId.lowercased()
+                            let branchName = pushBranchMap[commitIdLower]
+                            pendingCommits.append((commit, repo.name, branchName))
+                        }
+                    } catch {
+                        ActivityLogger.shared.log("Azure", "[\(repo.name)] Commits error: \(error)")
                     }
                 }
             }
 
+            // Collect all potential ticket IDs from commits for batch validation
+            var potentialTicketIds = Set<Int>()
+            for (commit, _, branchName) in pendingCommits {
+                let titleLine = String(commit.comment.split(separator: "\n").first ?? "")
+                let extracted = TicketExtractor.extractFromActivity(
+                    branchName: branchName,
+                    title: titleLine,
+                    description: commit.comment,
+                    defaultSystem: .azureBoards
+                )
+                for ticket in extracted where ticket.system == .azureBoards {
+                    if let numStr = ticket.key.replacingOccurrences(of: "AB#", with: "").components(separatedBy: CharacterSet.decimalDigits.inverted).first,
+                       let num = Int(numStr) {
+                        potentialTicketIds.insert(num)
+                    }
+                }
+            }
+
+            // Batch validate ticket IDs against Azure DevOps API
+            let validTicketIds = await validateWorkItemIds(
+                Array(potentialTicketIds),
+                organization: organization,
+                token: token
+            )
+
+            if !potentialTicketIds.isEmpty {
+                ActivityLogger.shared.log("Azure", "[\(project.name)] Validated \(validTicketIds.count)/\(potentialTicketIds.count) ticket IDs")
+            }
+
+            // Now normalize commits with validated ticket IDs
+            projectCommits = pendingCommits.count
+            for (commit, repoName, branchName) in pendingCommits {
+                let shortId = String(commit.commitId.prefix(8))
+                let branchLog = branchName ?? "NO_BRANCH"
+                let titleLine = commit.comment.split(separator: "\n").first ?? ""
+                ActivityLogger.shared.log("Azure", "  commit \(shortId) → \(branchLog): \(String(titleLine.prefix(50)))")
+
+                activities.append(normalizeCommit(
+                    commit,
+                    accountId: account.id,
+                    organization: organization,
+                    project: project.name,
+                    repoName: repoName,
+                    branchName: branchName,
+                    validTicketIds: validTicketIds
+                ))
+            }
+
             // Work Items (assigned to current user)
             if let workItems = try? await fetchWorkItems(organization: organization, project: project.name, token: token, minDate: minDate, maxDate: maxDate, userEmail: currentUser.email) {
+                projectWorkItems = workItems.count
                 for wi in workItems {
                     activities.append(normalizeWorkItem(wi, accountId: account.id, organization: organization, project: project.name))
                 }
+            }
+
+            totalPRs += projectPRs
+            totalCommits += projectCommits
+            totalWorkItems += projectWorkItems
+
+            if projectPRs > 0 || projectCommits > 0 || projectWorkItems > 0 {
+                ActivityLogger.shared.log("Azure", "[\(project.name)] \(projectPRs) PRs, \(projectCommits) commits, \(projectWorkItems) work items")
             }
         }
 
         // Sort by timestamp descending
         activities.sort { $0.timestamp > $1.timestamp }
+
+        // Log summary
+        ActivityLogger.shared.logFetchSummary("Azure", results: [
+            ("PRs", totalPRs),
+            ("commits", totalCommits),
+            ("work items", totalWorkItems)
+        ])
+
         return activities
     }
 
@@ -125,7 +214,7 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
     }
 
     private func get<T: Decodable>(organization: String, project: String? = nil, endpoint: String, token: String, query: [String: String] = [:], decoder: JSONDecoder = JSONDecoder()) async throws -> T {
-        var items = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        let items = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         let request = try RequestBuilder.buildAzureDevOpsRequest(
             organization: organization,
             path: buildPath(project: project, endpoint: endpoint),
@@ -182,10 +271,11 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         // Client-side filter by date range
         let minTime = DateFormatting.parseISO8601(minDate)?.timeIntervalSince1970 ?? 0
         let maxTime = DateFormatting.parseISO8601(maxDate)?.timeIntervalSince1970 ?? Date.distantFuture.timeIntervalSince1970
-        return resp.value.filter { pr in
+        let filtered = resp.value.filter { pr in
             let ts = DateFormatting.parseISO8601(pr.closedDate ?? pr.creationDate)?.timeIntervalSince1970 ?? 0
             return ts >= minTime && ts <= maxTime
         }
+        return filtered
     }
 
     private func fetchRepositories(organization: String, project: String, token: String) async throws -> [AzureRepo] {
@@ -199,8 +289,10 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         return resp.value
     }
 
-    private func fetchCommits(organization: String, project: String, repoId: String, token: String, minDate: String, maxDate: String, authorEmail: String) async throws -> [AzureCommit] {
+    private func fetchCommits(organization: String, project: String, repoId: String, token: String, minDate: String, maxDate: String) async throws -> [AzureCommit] {
         struct Response: Decodable { let value: [AzureCommit] }
+        // Fetch commits without author filter - we'll filter client-side
+        // This ensures we don't miss commits due to name format mismatches
         let resp: Response = try await get(
             organization: organization,
             project: project,
@@ -209,7 +301,6 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             query: [
                 "searchCriteria.fromDate": minDate,
                 "searchCriteria.toDate": maxDate,
-                "searchCriteria.author": authorEmail,
                 "$top": "100"
             ]
         )
@@ -218,7 +309,8 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
 
     private func fetchPushes(organization: String, project: String, repoId: String, token: String, minDate: String, maxDate: String) async throws -> [AzurePush] {
         struct Response: Decodable { let value: [AzurePush] }
-        let resp: Response = try await get(
+        // Get pushes within date range (matching TypeScript behavior)
+        let listResp: Response = try await get(
             organization: organization,
             project: project,
             endpoint: "/git/repositories/\(repoId)/pushes",
@@ -226,10 +318,41 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             query: [
                 "searchCriteria.fromDate": minDate,
                 "searchCriteria.toDate": maxDate,
+                "searchCriteria.includeRefUpdates": "true",
                 "$top": "100"
             ]
         )
-        return resp.value
+
+        // Fetch individual push details to get commits (list endpoint doesn't include them)
+        // Limit to 30 pushes to avoid excessive API calls
+        var detailedPushes: [AzurePush] = []
+        for push in listResp.value.prefix(30) {
+            guard let pushId = push.pushId else { continue }
+            if let detailed = try? await fetchPushDetail(
+                organization: organization,
+                project: project,
+                repoId: repoId,
+                pushId: pushId,
+                token: token
+            ) {
+                detailedPushes.append(detailed)
+            }
+        }
+
+        return detailedPushes
+    }
+
+    private func fetchPushDetail(organization: String, project: String, repoId: String, pushId: Int, token: String) async throws -> AzurePush {
+        return try await get(
+            organization: organization,
+            project: project,
+            endpoint: "/git/repositories/\(repoId)/pushes/\(pushId)",
+            token: token,
+            query: [
+                "includeCommits": "true",
+                "includeRefUpdates": "true"
+            ]
+        )
     }
 
     private func fetchWorkItems(organization: String, project: String, token: String, minDate: String, maxDate: String, userEmail: String) async throws -> [AzureWorkItem] {
@@ -292,6 +415,40 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         return workItemsResp.value
     }
 
+    /// Validate work item IDs by checking if they exist in Azure DevOps
+    /// Returns the set of valid IDs
+    private func validateWorkItemIds(_ ids: [Int], organization: String, token: String) async -> Set<Int> {
+        guard !ids.isEmpty else { return [] }
+
+        // Batch query - Azure DevOps supports up to 200 IDs per request
+        let idsString = ids.prefix(200).map { String($0) }.joined(separator: ",")
+
+        struct Response: Decodable {
+            let value: [ValidatedWorkItem]
+        }
+        struct ValidatedWorkItem: Decodable {
+            let id: Int
+        }
+
+        do {
+            let resp: Response = try await get(
+                organization: organization,
+                endpoint: "/wit/workitems",
+                token: token,
+                query: [
+                    "ids": idsString,
+                    "fields": "System.Id",  // Only fetch ID to minimize response
+                    "$top": "200"
+                ]
+            )
+            return Set(resp.value.map { $0.id })
+        } catch {
+            // If validation fails, assume all are invalid to avoid false positives
+            ActivityLogger.shared.log("Azure", "Work item validation failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
     // MARK: - Normalization
 
     private func normalizePullRequest(_ pr: AzurePullRequest, accountId: String, organization: String, linkedWorkItems: [AzureWorkItem] = []) -> UnifiedActivity {
@@ -301,6 +458,7 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
 
         // Extract branch name from refs/heads/feature/AB#123 format
         let branchName = pr.sourceRefName?.replacingOccurrences(of: "refs/heads/", with: "")
+        let targetBranch = pr.targetRefName?.replacingOccurrences(of: "refs/heads/", with: "")
 
         // Build API-linked tickets from work items
         var apiLinkedTickets: [LinkedTicket] = []
@@ -340,9 +498,10 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             participants: [pr.createdBy.displayName],
             url: url,
             sourceRef: branchName,
-            targetRef: pr.targetRefName?.replacingOccurrences(of: "refs/heads/", with: ""),
+            targetRef: targetBranch,
             projectName: pr.repository.name,
-            linkedTickets: linkedTickets
+            linkedTickets: linkedTickets,
+            rawEventType: "pull_request:\(pr.status)"
         )
     }
 
@@ -352,7 +511,8 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         organization: String,
         project: String,
         repoName: String,
-        branchName: String?
+        branchName: String?,
+        validTicketIds: Set<Int> = []
     ) -> UnifiedActivity {
         let timestamp = DateFormatting.parseISO8601(commit.author.date) ?? Date()
         let titleFirstLine = commit.comment.split(separator: "\n").first.map(String.init) ?? commit.comment
@@ -360,6 +520,53 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         let summary = commit.comment.count > 100 ? String(commit.comment.prefix(200)) : nil
         let url = URL(string: "https://dev.azure.com/\(organization)/\(project)/_git/\(repoName)/commit/\(commit.commitId)")
         let shortId = String(commit.commitId.prefix(8))
+
+        // Extract tickets from branch name and commit message
+        let extractedTickets = TicketExtractor.extractFromActivity(
+            branchName: branchName,
+            title: titleFirstLine,
+            description: commit.comment,
+            defaultSystem: .azureBoards
+        )
+
+        // Filter and build URLs for Azure Boards tickets - only include validated ones
+        let validatedTickets: [LinkedTicket] = extractedTickets.compactMap { ticket in
+            // For Azure Boards tickets, validate against the API results
+            if ticket.system == .azureBoards {
+                guard let numStr = ticket.key.replacingOccurrences(of: "AB#", with: "")
+                    .components(separatedBy: CharacterSet.decimalDigits.inverted).first,
+                      let ticketId = Int(numStr) else {
+                    return nil
+                }
+
+                // Only include if validated (or if no validation was done)
+                guard validTicketIds.isEmpty || validTicketIds.contains(ticketId) else {
+                    return nil
+                }
+
+                let ticketUrl = URL(string: "https://dev.azure.com/\(organization)/\(project)/_workitems/edit/\(numStr)")
+                return LinkedTicket(
+                    system: ticket.system,
+                    key: ticket.key,
+                    title: ticket.title,
+                    url: ticketUrl,
+                    source: ticket.source
+                )
+            }
+            // Non-Azure tickets pass through (e.g., Jira)
+            return ticket
+        }
+
+        let linkedTickets: [LinkedTicket]? = validatedTickets.isEmpty ? nil : validatedTickets
+
+        // Debug log for commit data
+        if let branch = branchName {
+            ActivityLogger.shared.log("Azure", "    → branch: \(branch)")
+        }
+        if let tickets = linkedTickets, !tickets.isEmpty {
+            let ticketKeys = tickets.map { $0.key }.joined(separator: ", ")
+            ActivityLogger.shared.log("Azure", "    → tickets: \(ticketKeys)")
+        }
 
         return UnifiedActivity(
             id: "azure-devops:\(accountId):commit-\(shortId)",
@@ -373,19 +580,27 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             participants: [commit.author.name],
             url: url,
             sourceRef: branchName,
-            projectName: repoName
+            projectName: repoName,
+            linkedTickets: linkedTickets,
+            rawEventType: "commit"
         )
     }
 
     private func mapCommitBranches(from pushes: [AzurePush]) -> [String: String] {
         var map: [String: String] = [:]
+        ActivityLogger.shared.log("Azure", "  mapCommitBranches: \(pushes.count) pushes")
         for push in pushes {
             let branchName = normalizeBranchName(from: push.refUpdates)
+            let commitCount = push.commits?.count ?? 0
+            let refNames = push.refUpdates?.compactMap { $0.name }.joined(separator: ", ") ?? "none"
+            ActivityLogger.shared.log("Azure", "    push: branch=\(branchName ?? "nil") refs=[\(refNames)] commits=\(commitCount)")
+
             guard let branchName, !branchName.isEmpty else { continue }
             for commit in push.commits ?? [] {
                 map[commit.commitId.lowercased()] = branchName
             }
         }
+        ActivityLogger.shared.log("Azure", "  mapCommitBranches: mapped \(map.count) commits to branches")
         return map
     }
 
@@ -416,7 +631,8 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             timestamp: timestamp,
             title: "[\(workItemType)] \(title)",
             participants: createdBy.map { [$0] },
-            url: url
+            url: url,
+            rawEventType: "work_item:\(workItemType)"
         )
     }
 }

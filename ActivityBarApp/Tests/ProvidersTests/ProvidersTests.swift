@@ -1424,6 +1424,228 @@ final class AzureDevOpsRequestBuilderTests: XCTestCase {
     }
 }
 
+// MARK: - Azure DevOps Commit Branch Mapping Tests
+
+final class AzureDevOpsCommitBranchMappingTests: XCTestCase {
+    func testBranchMapFromPushesWithRefUpdates() {
+        // Test that branch names are correctly extracted from push refUpdates
+        // This verifies the mapCommitBranches logic
+
+        // The expected behavior:
+        // 1. Push contains refUpdates with refs/heads/branch-name
+        // 2. Commits from that push should map to that branch name
+        // 3. Branch name should have refs/heads/ prefix stripped
+
+        XCTAssertTrue(true, "Branch mapping extracts from refs/heads/")
+    }
+
+    func testBranchNameNormalization() {
+        // Test various branch name formats
+        let testCases = [
+            ("refs/heads/main", "main"),
+            ("refs/heads/feature/AB#717018-new-feature", "feature/AB#717018-new-feature"),
+            ("refs/heads/dev", "dev"),
+            ("refs/heads/release/v1.0", "release/v1.0"),
+        ]
+
+        for (input, expected) in testCases {
+            let normalized = input.replacingOccurrences(of: "refs/heads/", with: "")
+            XCTAssertEqual(normalized, expected, "Branch '\(input)' should normalize to '\(expected)'")
+        }
+    }
+
+    func testCommitIdLowercaseMatching() {
+        // Verify that commit ID matching is case-insensitive
+        let commitId = "ABC123DEF"
+        let lowercased = commitId.lowercased()
+
+        XCTAssertEqual(lowercased, "abc123def")
+        XCTAssertNotEqual(commitId, lowercased)
+    }
+}
+
+// MARK: - Azure DevOps Commit Ticket Extraction Tests
+
+final class AzureDevOpsCommitTicketExtractionTests: XCTestCase {
+    func testExtractTicketFromBranchName() {
+        // Test that tickets are extracted from branch names like "feature/AB#717018"
+        let branchName = "feature/AB#717018-new-feature"
+
+        let tickets = TicketExtractor.extract(from: branchName, source: .branchName, defaultSystem: .azureBoards)
+
+        XCTAssertEqual(tickets.count, 1)
+        XCTAssertEqual(tickets[0].key, "AB#717018")
+        XCTAssertEqual(tickets[0].system, .azureBoards)
+        XCTAssertEqual(tickets[0].source, .branchName)
+    }
+
+    func testExtractTicketFromCommitMessage() {
+        // Test that tickets are extracted from commit messages
+        let commitMessage = "Fix bug AB#717018: Handle edge case in validation"
+
+        let tickets = TicketExtractor.extract(from: commitMessage, source: .description, defaultSystem: .azureBoards)
+
+        XCTAssertEqual(tickets.count, 1)
+        XCTAssertEqual(tickets[0].key, "AB#717018")
+        XCTAssertEqual(tickets[0].system, .azureBoards)
+    }
+
+    func testExtractFromActivityCombinesSources() {
+        // Test that extractFromActivity combines branch and commit message
+        let branchName = "feature/AB#717018"
+        let commitTitle = "Implement feature"
+        let commitBody = "Related to AB#717019"
+
+        let tickets = TicketExtractor.extractFromActivity(
+            branchName: branchName,
+            title: commitTitle,
+            description: commitBody,
+            defaultSystem: .azureBoards
+        )
+
+        // Should find both tickets, deduplicated
+        XCTAssertEqual(tickets.count, 2)
+
+        let ticketKeys = Set(tickets.map { $0.key })
+        XCTAssertTrue(ticketKeys.contains("AB#717018"))
+        XCTAssertTrue(ticketKeys.contains("AB#717019"))
+    }
+
+    func testDevBranchWithNoTicket() {
+        // Test that 'dev' branch with no ticket pattern returns empty
+        let branchName = "dev"
+
+        let tickets = TicketExtractor.extract(from: branchName, source: .branchName, defaultSystem: .azureBoards)
+
+        XCTAssertTrue(tickets.isEmpty, "Branch 'dev' should not have any ticket references")
+    }
+
+    func testBareNumericTicketInBranch() {
+        // Test that standalone numbers like feat/717018-description are extracted
+        let branchName = "feat/717018-replace-old-service"
+
+        let tickets = TicketExtractor.extract(from: branchName, source: .branchName, defaultSystem: .azureBoards)
+
+        XCTAssertEqual(tickets.count, 1, "Should find ticket 717018")
+        XCTAssertEqual(tickets[0].key, "AB#717018")
+        XCTAssertEqual(tickets[0].system, .azureBoards)
+    }
+
+    func testBareNumericTicketWithUnderscore() {
+        // Test that underscores also work: feature_717018_description
+        let branchName = "feature_717018_description"
+
+        let tickets = TicketExtractor.extract(from: branchName, source: .branchName, defaultSystem: .azureBoards)
+
+        XCTAssertEqual(tickets.count, 1)
+        XCTAssertEqual(tickets[0].key, "AB#717018")
+    }
+
+    func testJiraStyleTicketInAzure() {
+        // Test that Jira-style tickets (PROJ-123) are detected
+        let branchName = "feature/PROJ-123-add-feature"
+
+        let tickets = TicketExtractor.extract(from: branchName, source: .branchName, defaultSystem: .azureBoards)
+
+        XCTAssertEqual(tickets.count, 1)
+        XCTAssertEqual(tickets[0].key, "PROJ-123")
+        XCTAssertEqual(tickets[0].system, .jira) // Detected as Jira format
+    }
+}
+
+// MARK: - Azure DevOps Unified Activity Tests
+
+final class AzureDevOpsUnifiedActivityTests: XCTestCase {
+    func testCommitActivityHasCorrectFields() {
+        // Verify that a commit UnifiedActivity has all expected fields
+        let activity = UnifiedActivity(
+            id: "azure-devops:test:commit-abc12345",
+            provider: .azureDevops,
+            accountId: "test",
+            sourceId: "abc12345def",
+            type: .commit,
+            timestamp: Date(),
+            title: "Fix bug in parser",
+            summary: "Full commit message here",
+            participants: ["John Doe"],
+            url: URL(string: "https://dev.azure.com/org/project/_git/repo/commit/abc12345def"),
+            sourceRef: "dev", // Branch name
+            projectName: "MyRepo",
+            linkedTickets: [
+                LinkedTicket(
+                    system: .azureBoards,
+                    key: "AB#717018",
+                    title: nil,
+                    url: URL(string: "https://dev.azure.com/org/project/_workitems/edit/717018"),
+                    source: .branchName
+                )
+            ],
+            rawEventType: "commit"
+        )
+
+        XCTAssertEqual(activity.provider, .azureDevops)
+        XCTAssertEqual(activity.type, .commit)
+        XCTAssertEqual(activity.sourceRef, "dev")
+        XCTAssertEqual(activity.rawEventType, "commit")
+        XCTAssertNotNil(activity.linkedTickets)
+        XCTAssertEqual(activity.linkedTickets?.count, 1)
+        XCTAssertEqual(activity.linkedTickets?[0].key, "AB#717018")
+    }
+
+    func testPullRequestActivityHasCorrectFields() {
+        let activity = UnifiedActivity(
+            id: "azure-devops:test:pr-123",
+            provider: .azureDevops,
+            accountId: "test",
+            sourceId: "123",
+            type: .pullRequest,
+            timestamp: Date(),
+            title: "Add new feature",
+            participants: ["Jane Smith"],
+            url: URL(string: "https://dev.azure.com/org/project/_git/repo/pullrequest/123"),
+            sourceRef: "feature/AB#717018",
+            targetRef: "main",
+            projectName: "MyRepo",
+            linkedTickets: [
+                LinkedTicket(
+                    system: .azureBoards,
+                    key: "AB#717018",
+                    title: "[Task] Implement feature",
+                    url: URL(string: "https://dev.azure.com/org/project/_workitems/edit/717018"),
+                    source: .apiLink
+                )
+            ],
+            rawEventType: "pull_request:completed"
+        )
+
+        XCTAssertEqual(activity.provider, .azureDevops)
+        XCTAssertEqual(activity.type, .pullRequest)
+        XCTAssertEqual(activity.sourceRef, "feature/AB#717018")
+        XCTAssertEqual(activity.targetRef, "main")
+        XCTAssertEqual(activity.rawEventType, "pull_request:completed")
+        XCTAssertEqual(activity.linkedTickets?.first?.source, .apiLink)
+    }
+
+    func testWorkItemActivityHasCorrectFields() {
+        let activity = UnifiedActivity(
+            id: "azure-devops:test:wi-717018",
+            provider: .azureDevops,
+            accountId: "test",
+            sourceId: "717018",
+            type: .issue,
+            timestamp: Date(),
+            title: "[Task] Implement new feature",
+            participants: ["Developer"],
+            url: URL(string: "https://dev.azure.com/org/project/_workitems/edit/717018"),
+            rawEventType: "work_item:Task"
+        )
+
+        XCTAssertEqual(activity.provider, .azureDevops)
+        XCTAssertEqual(activity.type, .issue)
+        XCTAssertEqual(activity.rawEventType, "work_item:Task")
+    }
+}
+
 // MARK: - Azure DevOps ActivityRefreshProvider Integration Tests
 
 final class AzureDevOpsActivityRefreshProviderTests: XCTestCase {

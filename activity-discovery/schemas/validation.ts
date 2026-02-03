@@ -80,6 +80,12 @@ export const UnifiedActivitySchema = z.object({
   participants: z.array(z.string()).optional(),
   /** Deep link URL to the source (optional) */
   url: z.string().url().optional(),
+  /** Source branch/ref name (optional) */
+  sourceRef: z.string().optional(),
+  /** Target branch/ref name (optional) */
+  targetRef: z.string().optional(),
+  /** Raw event type from provider (optional) */
+  rawEventType: z.string().optional(),
 });
 
 /**

@@ -20,15 +20,19 @@ public final class GoogleCalendarProviderAdapter: ProviderAdapter, Sendable {
     // MARK: - ProviderAdapter Protocol
 
     public func fetchActivities(for account: Account, token: String, from: Date, to: Date) async throws -> [UnifiedActivity] {
+        ActivityLogger.shared.log("Google", "Fetching events (\(DateFormatting.dateString(from: from)) to \(DateFormatting.dateString(from: to)))")
+
         // Determine which calendars to fetch from:
         // - If user selected specific calendars (account.calendarIds), use only those
         // - Otherwise fall back to fetching all accessible calendars
         let calendarIdsToFetch: [String]
         if let selectedIds = account.calendarIds, !selectedIds.isEmpty {
             calendarIdsToFetch = selectedIds
+            ActivityLogger.shared.log("Google", "Using \(selectedIds.count) selected calendars")
         } else {
             let allCalendars = try await listCalendars(token: token)
             calendarIdsToFetch = allCalendars.map { $0.id }
+            ActivityLogger.shared.log("Google", "Found \(allCalendars.count) calendars")
         }
 
         var activities: [UnifiedActivity] = []
@@ -71,6 +75,14 @@ public final class GoogleCalendarProviderAdapter: ProviderAdapter, Sendable {
 
         // Sort by timestamp descending
         activities.sort { $0.timestamp > $1.timestamp }
+
+        // Log summary
+        let allDayCount = activities.filter { $0.isAllDay == true }.count
+        let timedCount = activities.count - allDayCount
+        ActivityLogger.shared.logFetchSummary("Google", results: [
+            ("meetings", timedCount),
+            ("all-day", allDayCount)
+        ])
 
         return activities
     }

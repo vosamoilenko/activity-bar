@@ -11,6 +11,7 @@ import type {
   AzureDevOpsFetchOptions,
   AzurePullRequest,
   AzureCommit,
+  AzurePush,
   AzureWorkItem,
   AzureWiqlResult,
 } from './types.js';
@@ -124,6 +125,8 @@ function normalizePullRequest(
   organization: string
 ): UnifiedActivity {
   const timestamp = pr.closedDate ?? pr.creationDate;
+  const sourceRef = stripBranchRef(pr.sourceRefName);
+  const targetRef = stripBranchRef(pr.targetRefName);
 
   return {
     id: `azure-devops:${accountId}:pr-${pr.pullRequestId}`,
@@ -135,6 +138,9 @@ function normalizePullRequest(
     title: pr.title,
     url: buildPRUrl(organization, pr.repository.project.name, pr.repository.name, pr.pullRequestId),
     participants: [pr.createdBy.displayName],
+    sourceRef,
+    targetRef,
+    rawEventType: `pull_request:${pr.status}`,
   };
 }
 
@@ -146,7 +152,8 @@ function normalizeCommit(
   accountId: string,
   organization: string,
   project: string,
-  repoName: string
+  repoName: string,
+  branchName?: string
 ): UnifiedActivity {
   const timestamp = commit.author.date;
 
@@ -161,6 +168,8 @@ function normalizeCommit(
     summary: commit.comment.length > 100 ? commit.comment.slice(0, 200) : undefined,
     url: `https://dev.azure.com/${organization}/${project}/_git/${repoName}/commit/${commit.commitId}`,
     participants: [commit.author.name],
+    sourceRef: branchName,
+    rawEventType: 'commit',
   };
 }
 
@@ -194,7 +203,16 @@ function normalizeWorkItem(
     title: `[${workItemType}] ${fields['System.Title']}`,
     url: buildWorkItemUrl(organization, project, workItem.id),
     participants: [fields['System.CreatedBy'].displayName],
+    rawEventType: `work_item:${workItemType}`,
   };
+}
+
+/**
+ * Normalize Azure ref name to branch name
+ */
+function stripBranchRef(refName?: string): string | undefined {
+  if (!refName) return undefined;
+  return refName.replace(/^refs\/heads\//, '');
 }
 
 /**
@@ -253,6 +271,56 @@ async function fetchCommits(
   );
 
   return response.value;
+}
+
+/**
+ * Fetch pushes for a repository (used to map commits to branch names)
+ */
+async function fetchPushes(
+  organization: string,
+  project: string,
+  repoId: string,
+  token: string,
+  minDate: string,
+  maxDate: string
+): Promise<AzurePush[]> {
+  type PushResponse = { value: AzurePush[] };
+
+  const response = await fetchAPI<PushResponse>(
+    organization,
+    token,
+    `/git/repositories/${repoId}/pushes`,
+    project,
+    {
+      'searchCriteria.fromDate': minDate,
+      'searchCriteria.toDate': maxDate,
+      'searchCriteria.includeRefUpdates': 'true',
+      '$top': '100',
+    }
+  );
+
+  return response.value;
+}
+
+function buildCommitBranchMap(pushes: AzurePush[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const push of pushes) {
+    const branchName = normalizeBranchName(push.refUpdates);
+    if (!branchName) continue;
+    for (const commit of push.commits ?? []) {
+      map.set(commit.commitId.toLowerCase(), branchName);
+    }
+  }
+  return map;
+}
+
+function normalizeBranchName(
+  refUpdates?: Array<{ name?: string }>
+): string | undefined {
+  if (!refUpdates || refUpdates.length === 0) return undefined;
+  const headRef = refUpdates.find((ref) => ref.name?.startsWith('refs/heads/'));
+  const refName = headRef?.name ?? refUpdates[0].name;
+  return stripBranchRef(refName);
 }
 
 /**
@@ -347,6 +415,21 @@ export async function fetchAzureDevOpsActivities(
       const repos = await fetchRepositories(account.organization, project, account.token);
       for (const repo of repos.slice(0, 10)) { // Limit repos to avoid over-fetch
         try {
+          let commitBranchMap = new Map<string, string>();
+          try {
+            const pushes = await fetchPushes(
+              account.organization,
+              project,
+              repo.id,
+              account.token,
+              minDate,
+              maxDate
+            );
+            commitBranchMap = buildCommitBranchMap(pushes);
+          } catch {
+            // Skip branch mapping if pushes are unavailable
+          }
+
           const commits = await fetchCommits(
             account.organization,
             project,
@@ -357,7 +440,15 @@ export async function fetchAzureDevOpsActivities(
           );
 
           for (const commit of commits) {
-            activities.push(normalizeCommit(commit, account.id, account.organization, project, repo.name));
+            const branchName = commitBranchMap.get(commit.commitId.toLowerCase());
+            activities.push(normalizeCommit(
+              commit,
+              account.id,
+              account.organization,
+              project,
+              repo.name,
+              branchName
+            ));
           }
         } catch {
           // Skip if we can't fetch commits for this repo

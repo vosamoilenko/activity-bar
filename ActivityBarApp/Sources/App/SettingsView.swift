@@ -11,10 +11,11 @@ struct SettingsView: View {
     var refreshScheduler: RefreshScheduler?
     var preferencesManager: PreferencesManager?
     var onPanelAppearanceChanged: (() -> Void)?
+    var onClearCache: ((String) async -> Void)?
 
     var body: some View {
         TabView {
-            AccountsSettingsView(appState: appState, tokenStore: tokenStore, refreshScheduler: refreshScheduler)
+            AccountsSettingsView(appState: appState, tokenStore: tokenStore, refreshScheduler: refreshScheduler, onClearCache: onClearCache)
                 .tabItem {
                     Label("Accounts", systemImage: "person.2")
                 }
@@ -41,6 +42,7 @@ struct AccountsSettingsView: View {
     let appState: AppState
     let tokenStore: TokenStore
     var refreshScheduler: RefreshScheduler?
+    var onClearCache: ((String) async -> Void)?
 
     /// Computed session reference
     private var session: Session { appState.session }
@@ -73,7 +75,8 @@ struct AccountsSettingsView: View {
                             account: account,
                             appState: appState,
                             tokenStore: tokenStore,
-                            onRemove: { removeAccount(account) }
+                            onRemove: { removeAccount(account) },
+                            onClearCache: { clearCacheForAccount(account) }
                         )
                     }
                 }
@@ -221,6 +224,37 @@ struct AccountsSettingsView: View {
             }
         }
     }
+
+    /// Clear cache for an account (keeps account and tokens, just clears events)
+    private func clearCacheForAccount(_ account: Account) {
+        print("[ActivityBar] clearCacheForAccount called for: \(account.id)")
+        Task { @MainActor in
+            if let clearCache = onClearCache {
+                print("[ActivityBar] Clearing cache via closure...")
+                await clearCache(account.id)
+                print("[ActivityBar] Cache cleared for account: \(account.id)")
+                // Trigger a refresh to reload data
+                if let scheduler = refreshScheduler {
+                    print("[ActivityBar] Triggering refresh...")
+                    scheduler.forceRefresh()
+                } else {
+                    print("[ActivityBar] WARNING: refreshScheduler is nil, cannot trigger refresh!")
+                }
+            } else {
+                // Fallback: try AppDelegate (may not work in separate window)
+                if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+                    print("[ActivityBar] Clearing cache via AppDelegate fallback...")
+                    await appDelegate.clearCacheForAccount(account.id)
+                    print("[ActivityBar] Cache cleared for account: \(account.id)")
+                    if let scheduler = refreshScheduler {
+                        scheduler.forceRefresh()
+                    }
+                } else {
+                    print("[ActivityBar] WARNING: Neither onClearCache closure nor appDelegate available!")
+                }
+            }
+        }
+    }
 }
 
 /// Row view for a single account in settings
@@ -229,9 +263,13 @@ struct AccountRowView: View {
     let appState: AppState
     let tokenStore: TokenStore
     let onRemove: () -> Void
+    let onClearCache: () -> Void
 
     /// Show confirmation dialog for removal
     @State private var showingRemoveConfirmation = false
+
+    /// Show confirmation dialog for clearing cache
+    @State private var showingClearCacheConfirmation = false
 
     /// Show event types configuration sheet
     @State private var showingEventTypesSheet = false
@@ -354,6 +392,28 @@ struct AccountRowView: View {
                 }
                 .buttonStyle(.plain)
                 .help(hasEventTypeFiltering ? "Event filtering active (\(filteredEventTypesCount) hidden)" : "Configure event types")
+
+                // Clear cache button
+                Button {
+                    showingClearCacheConfirmation = true
+                } label: {
+                    Image(systemName: "arrow.clockwise.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear cached data")
+                .confirmationDialog(
+                    "Clear cache for \(account.displayName)?",
+                    isPresented: $showingClearCacheConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Clear Cache", role: .destructive) {
+                        onClearCache()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will delete all cached events and data for this account. Fresh data will be fetched on the next refresh.")
+                }
 
                 // Remove/logout button
                 Button {

@@ -9,6 +9,116 @@ import AppKit
 /// Contains API adapters for fetching activity data from providers.
 /// All provider logic follows contracts defined in activity-discovery.
 
+// MARK: - Activity Logger
+
+/// Centralized logger for ActivityBar with file output support
+public final class ActivityLogger: @unchecked Sendable {
+    public static let shared = ActivityLogger()
+
+    private let logFileURL: URL
+    private let queue = DispatchQueue(label: "com.activitybar.logger", qos: .utility)
+    private let dateFormatter: DateFormatter
+
+    private init() {
+        // Try to write logs to the activity-discovery repo if available
+        let fm = FileManager.default
+        let homeDir = fm.homeDirectoryForCurrentUser
+
+        // Check common developer paths for the activity-bar repo
+        let possiblePaths = [
+            homeDir.appendingPathComponent("Developer/activity-bar/activity-discovery/logs"),
+            homeDir.appendingPathComponent("dev/activity-bar/activity-discovery/logs"),
+            homeDir.appendingPathComponent("projects/activity-bar/activity-discovery/logs"),
+            homeDir.appendingPathComponent("Library/Logs/ActivityBar")  // Fallback
+        ]
+
+        var logDir: URL = homeDir.appendingPathComponent("Library/Logs/ActivityBar")
+        for path in possiblePaths {
+            // Check if parent directory exists (activity-discovery)
+            let parentDir = path.deletingLastPathComponent()
+            if fm.fileExists(atPath: parentDir.path) {
+                logDir = path
+                break
+            }
+        }
+
+        try? fm.createDirectory(at: logDir, withIntermediateDirectories: true)
+
+        // New log file per app session with sortable timestamp: activity_YYYY-MM-DD_HH-MM-SS.log
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let timestampStr = df.string(from: Date())
+        logFileURL = logDir.appendingPathComponent("activity_\(timestampStr).log")
+
+        // Time formatter for log entries
+        dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "HH:mm:ss.SSS"
+
+        // Log file location on startup
+        print("[ActivityBar] Log file: \(logFileURL.path)")
+    }
+
+    /// Log a message with provider context
+    public func log(_ provider: String, _ message: String) {
+        let time = dateFormatter.string(from: Date())
+        let entry = "[\(time)][\(provider)] \(message)"
+
+        // Console output
+        print(entry)
+
+        // File output
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let line = entry + "\n"
+            if let data = line.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: self.logFileURL.path) {
+                    if let handle = try? FileHandle(forWritingTo: self.logFileURL) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        try? handle.close()
+                    }
+                } else {
+                    try? data.write(to: self.logFileURL)
+                }
+            }
+        }
+    }
+
+    /// Log HTTP request/response in concise format
+    public func logHTTP(_ provider: String, method: String, path: String, status: Int, bytes: Int) {
+        let sizeStr = formatBytes(bytes)
+        log(provider, "\(status) \(method) \(path) → \(sizeStr)")
+    }
+
+    /// Log HTTP error
+    public func logHTTPError(_ provider: String, method: String, path: String, status: Int, error: String) {
+        log(provider, "❌ \(status) \(method) \(path): \(error)")
+    }
+
+    /// Log fetch results summary
+    public func logFetchSummary(_ provider: String, results: [(String, Int)]) {
+        let parts = results.filter { $0.1 > 0 }.map { "\($0.1) \($0.0)" }
+        if parts.isEmpty {
+            log(provider, "Fetched: (none)")
+        } else {
+            log(provider, "Fetched: \(parts.joined(separator: ", "))")
+        }
+    }
+
+    /// Get path to current log file
+    public var currentLogFile: URL { logFileURL }
+
+    private func formatBytes(_ bytes: Int) -> String {
+        if bytes < 1024 {
+            return "\(bytes)B"
+        } else if bytes < 1024 * 1024 {
+            return String(format: "%.1fKB", Double(bytes) / 1024.0)
+        } else {
+            return String(format: "%.1fMB", Double(bytes) / (1024.0 * 1024.0))
+        }
+    }
+}
+
 // MARK: - Provider Errors
 
 /// Errors that can occur during provider fetch operations
@@ -140,26 +250,27 @@ public actor HTTPClient {
     /// Execute an HTTP request with automatic error handling and rate limit tracking
     /// - Parameters:
     ///   - request: The URL request to execute
+    ///   - providerName: Optional provider name for logging context
     /// - Returns: The response data
-    public func executeRequest(_ request: URLRequest) async throws -> Data {
-        print("[ActivityBar][HTTPClient] executeRequest: \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "nil")")
+    public func executeRequest(_ request: URLRequest, providerName: String? = nil) async throws -> Data {
+        let method = request.httpMethod ?? "GET"
+        let path = request.url?.path ?? "/"
+        let provider = providerName ?? detectProvider(from: request.url)
 
         // Check if we're rate limited for this domain
         if let host = request.url?.host {
             if let rateLimitInfo = rateLimitState[host], rateLimitInfo.isLimited {
-                print("[ActivityBar][HTTPClient] Rate limited for \(host)")
+                ActivityLogger.shared.log(provider, "⏳ Rate limited for \(host)")
                 throw ProviderError.rateLimited(retryAfter: rateLimitInfo.retryAfterSeconds)
             }
         }
 
         let (data, response) = try await session.data(for: request)
-        print("[ActivityBar][HTTPClient] Response received, size: \(data.count) bytes")
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            print("[ActivityBar][HTTPClient] ERROR: Not an HTTP response")
+            ActivityLogger.shared.logHTTPError(provider, method: method, path: path, status: 0, error: "Not HTTP response")
             throw ProviderError.invalidResponse("Not an HTTP response")
         }
-        print("[ActivityBar][HTTPClient] HTTP status: \(httpResponse.statusCode)")
 
         // Track rate limit headers
         if let host = request.url?.host {
@@ -169,22 +280,36 @@ public actor HTTPClient {
         // Handle HTTP errors
         switch httpResponse.statusCode {
         case 200...299:
+            ActivityLogger.shared.logHTTP(provider, method: method, path: path, status: httpResponse.statusCode, bytes: data.count)
             return data
         case 401, 403:
-            print("[ActivityBar][HTTPClient] ERROR: Auth failed - HTTP \(httpResponse.statusCode)")
-            if let body = String(data: data, encoding: .utf8) {
-                print("[ActivityBar][HTTPClient] Response body: \(body.prefix(300))")
-            }
+            let body = String(data: data, encoding: .utf8)?.prefix(100) ?? ""
+            ActivityLogger.shared.logHTTPError(provider, method: method, path: path, status: httpResponse.statusCode, error: "Auth failed: \(body)")
             throw ProviderError.authenticationFailed("HTTP \(httpResponse.statusCode)")
         case 429:
             let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init)
-            print("[ActivityBar][HTTPClient] ERROR: Rate limited, retry after: \(retryAfter ?? -1)")
+            ActivityLogger.shared.logHTTPError(provider, method: method, path: path, status: 429, error: "Rate limited, retry: \(retryAfter ?? -1)s")
             throw ProviderError.rateLimited(retryAfter: retryAfter)
         default:
-            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
-            print("[ActivityBar][HTTPClient] ERROR: HTTP \(httpResponse.statusCode) - \(body.prefix(300))")
+            let body = String(data: data, encoding: .utf8)?.prefix(100) ?? "Unknown"
+            ActivityLogger.shared.logHTTPError(provider, method: method, path: path, status: httpResponse.statusCode, error: String(body))
             throw ProviderError.networkError("HTTP \(httpResponse.statusCode): \(body)")
         }
+    }
+
+    /// Detect provider name from URL
+    private func detectProvider(from url: URL?) -> String {
+        guard let host = url?.host?.lowercased() else { return "HTTP" }
+        if host.contains("dev.azure.com") || host.contains("visualstudio.com") {
+            return "Azure"
+        } else if host.contains("gitlab") {
+            return "GitLab"
+        } else if host.contains("github") {
+            return "GitHub"
+        } else if host.contains("googleapis.com") {
+            return "Google"
+        }
+        return "HTTP"
     }
 
     /// Execute an HTTP request and decode the response as JSON

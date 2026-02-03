@@ -40,6 +40,13 @@ public enum TicketExtractor {
             system: .azureBoards,
             keyTransform: { "AB#\($0)" }
         ),
+        // Azure Boards: Standalone 6-digit numbers in branch names (e.g., feat/717018-description)
+        // Matches numbers with 5+ digits that follow a slash and are followed by dash or end
+        PatternDef(
+            pattern: #"(?<=/|_)(\d{5,})(?=-|_|$)"#,
+            system: .azureBoards,
+            keyTransform: { "AB#\($0)" }
+        ),
         // Shortcut: sc-123 or shortcut-123
         PatternDef(
             pattern: #"\b(?:sc-|shortcut-)(\d+)\b"#,

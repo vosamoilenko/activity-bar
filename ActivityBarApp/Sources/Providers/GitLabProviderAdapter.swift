@@ -38,6 +38,8 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: to)!
         let beforeDate = DateFormatting.dateString(from: tomorrow)
 
+        ActivityLogger.shared.log("GitLab", "Fetching activities for \(user.username) (\(afterDate) to \(beforeDate))")
+
         // Fetch user's events with pagination (user-specific endpoint returns the user's own activity)
         let events = try await fetchAllPages(
             baseURL: baseURL,
@@ -46,11 +48,6 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             endpoint: "/users/\(user.id)/events",
             params: ["after": afterDate, "before": beforeDate]
         )
-        print("[ActivityBar][GitLab] Fetched \(events.count) raw events from API")
-        // Log event types for debugging
-        let eventTypes = events.map { "\($0.actionName):\($0.targetType ?? "nil")" }
-        let typeCounts = Dictionary(grouping: eventTypes, by: { $0 }).mapValues { $0.count }
-        print("[ActivityBar][GitLab] Event types: \(typeCounts)")
 
         // Get unique project IDs to fetch project details for URLs and names
         let projectIds = Set(events.compactMap { $0.projectId })
@@ -94,15 +91,24 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
 
         // Normalize events to activities
         var activities: [UnifiedActivity] = []
-        var skippedEvents: [String] = []
         for event in events {
             if let activity = normalizeEvent(event, accountId: account.id, baseURL: baseURL, projectInfoMap: projectInfoMap, mrDetailsMap: mrDetailsMap, relatedIssuesMap: relatedIssuesMap, authorAvatarMap: authorAvatarMap) {
                 activities.append(activity)
-            } else {
-                skippedEvents.append("\(event.actionName):\(event.targetType ?? "nil")")
             }
         }
-        print("[ActivityBar][GitLab] Normalized to \(activities.count) activities, skipped \(skippedEvents.count) events: \(Set(skippedEvents))")
+
+        // Count activity types for summary
+        let mrCount = activities.filter { $0.type == .pullRequest }.count
+        let commitCount = activities.filter { $0.type == .commit }.count
+        let issueCount = activities.filter { $0.type == .issue }.count
+        let reviewCount = activities.filter { $0.type == .codeReview }.count
+
+        ActivityLogger.shared.logFetchSummary("GitLab", results: [
+            ("MRs", mrCount),
+            ("commits", commitCount),
+            ("issues", issueCount),
+            ("reviews", reviewCount)
+        ])
 
         // Sort by timestamp descending
         activities.sort { $0.timestamp > $1.timestamp }
