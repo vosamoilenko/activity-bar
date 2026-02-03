@@ -62,6 +62,16 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             // Commits per repository (limit repos to avoid over-fetch)
             if let repos = try? await fetchRepositories(organization: organization, project: project.name, token: token) {
                 for repo in repos.prefix(10) {
+                    let pushBranchMap = (try? await fetchPushes(
+                        organization: organization,
+                        project: project.name,
+                        repoId: repo.id,
+                        token: token,
+                        minDate: minDate,
+                        maxDate: maxDate
+                    ))
+                    .map { mapCommitBranches(from: $0) } ?? [:]
+
                     if let commits = try? await fetchCommits(
                         organization: organization,
                         project: project.name,
@@ -72,7 +82,15 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
                         authorEmail: currentUser.email
                     ) {
                         for commit in commits {
-                            activities.append(normalizeCommit(commit, accountId: account.id, organization: organization, project: project.name, repoName: repo.name))
+                            let branchName = pushBranchMap[commit.commitId.lowercased()]
+                            activities.append(normalizeCommit(
+                                commit,
+                                accountId: account.id,
+                                organization: organization,
+                                project: project.name,
+                                repoName: repo.name,
+                                branchName: branchName
+                            ))
                         }
                     }
                 }
@@ -198,6 +216,22 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         return resp.value
     }
 
+    private func fetchPushes(organization: String, project: String, repoId: String, token: String, minDate: String, maxDate: String) async throws -> [AzurePush] {
+        struct Response: Decodable { let value: [AzurePush] }
+        let resp: Response = try await get(
+            organization: organization,
+            project: project,
+            endpoint: "/git/repositories/\(repoId)/pushes",
+            token: token,
+            query: [
+                "searchCriteria.fromDate": minDate,
+                "searchCriteria.toDate": maxDate,
+                "$top": "100"
+            ]
+        )
+        return resp.value
+    }
+
     private func fetchWorkItems(organization: String, project: String, token: String, minDate: String, maxDate: String, userEmail: String) async throws -> [AzureWorkItem] {
         // WIQL query: changed within date range and assigned to current user (date-only)
         let minDateOnly = String(minDate.prefix(10))
@@ -312,7 +346,14 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
         )
     }
 
-    private func normalizeCommit(_ commit: AzureCommit, accountId: String, organization: String, project: String, repoName: String) -> UnifiedActivity {
+    private func normalizeCommit(
+        _ commit: AzureCommit,
+        accountId: String,
+        organization: String,
+        project: String,
+        repoName: String,
+        branchName: String?
+    ) -> UnifiedActivity {
         let timestamp = DateFormatting.parseISO8601(commit.author.date) ?? Date()
         let titleFirstLine = commit.comment.split(separator: "\n").first.map(String.init) ?? commit.comment
         let title = String(titleFirstLine.prefix(100))
@@ -331,8 +372,29 @@ public final class AzureDevOpsProviderAdapter: ProviderAdapter, Sendable {
             summary: summary,
             participants: [commit.author.name],
             url: url,
+            sourceRef: branchName,
             projectName: repoName
         )
+    }
+
+    private func mapCommitBranches(from pushes: [AzurePush]) -> [String: String] {
+        var map: [String: String] = [:]
+        for push in pushes {
+            let branchName = normalizeBranchName(from: push.refUpdates)
+            guard let branchName, !branchName.isEmpty else { continue }
+            for commit in push.commits ?? [] {
+                map[commit.commitId.lowercased()] = branchName
+            }
+        }
+        return map
+    }
+
+    private func normalizeBranchName(from refUpdates: [AzureRefUpdate]?) -> String? {
+        guard let refUpdates, !refUpdates.isEmpty else { return nil }
+        if let ref = refUpdates.first(where: { $0.name?.hasPrefix("refs/heads/") == true }) {
+            return ref.name?.replacingOccurrences(of: "refs/heads/", with: "")
+        }
+        return refUpdates.first?.name?.replacingOccurrences(of: "refs/heads/", with: "")
     }
 
     private func normalizeWorkItem(_ workItem: AzureWorkItem, accountId: String, organization: String, project: String) -> UnifiedActivity {
@@ -446,6 +508,21 @@ struct AzureCommitIdentity: Decodable, Sendable {
     let date: String
 }
 
+struct AzurePush: Decodable, Sendable {
+    let pushId: Int?
+    let date: String?
+    let commits: [AzurePushCommit]?
+    let refUpdates: [AzureRefUpdate]?
+}
+
+struct AzurePushCommit: Decodable, Sendable {
+    let commitId: String
+}
+
+struct AzureRefUpdate: Decodable, Sendable {
+    let name: String?
+}
+
 struct AzureWorkItem: Decodable, Sendable {
     let id: Int
     let fields: AzureFields
@@ -534,4 +611,3 @@ struct AzureWiqlResult: Decodable, Sendable {
     struct Item: Decodable, Sendable { let id: Int; let url: String }
     let workItems: [Item]
 }
-

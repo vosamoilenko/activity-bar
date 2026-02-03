@@ -128,7 +128,7 @@ public enum WeekStartDay: String, CaseIterable, Sendable, Codable {
 /// ACTIVITY-025: Settings persisted locally with schema versioning
 public struct UserPreferences: Codable, Sendable, Equatable {
     /// Schema version for migration support
-    public static let currentSchemaVersion = 7
+    public static let currentSchemaVersion = 9
 
     /// Schema version stored with the data
     public var schemaVersion: Int
@@ -146,6 +146,12 @@ public struct UserPreferences: Codable, Sendable, Equatable {
 
     /// Whether to show event author/owner (for debugging)
     public var showEventAuthor: Bool
+
+    /// Whether to show raw event type from provider (for debugging, e.g., "pushed to", "merged")
+    public var showEventType: Bool
+
+    /// Whether to show branch info (commit branch, MR source/target)
+    public var showEventBranch: Bool
 
     // MARK: - Calendar Preferences
 
@@ -173,6 +179,8 @@ public struct UserPreferences: Codable, Sendable, Equatable {
         showMeetings: Bool = true,
         showAllDayEvents: Bool = true,
         showEventAuthor: Bool = true,
+        showEventType: Bool = false,
+        showEventBranch: Bool = true,
         weekStartDay: WeekStartDay = .sunday,
         refreshInterval: RefreshInterval = .fifteenMinutes,
         panelBlurMaterial: PanelBlurMaterial = .hudWindow,
@@ -183,6 +191,8 @@ public struct UserPreferences: Codable, Sendable, Equatable {
         self.showMeetings = showMeetings
         self.showAllDayEvents = showAllDayEvents
         self.showEventAuthor = showEventAuthor
+        self.showEventType = showEventType
+        self.showEventBranch = showEventBranch
         self.weekStartDay = weekStartDay
         self.refreshInterval = refreshInterval
         self.panelBlurMaterial = panelBlurMaterial
@@ -274,6 +284,16 @@ public final class PreferencesManager {
             migrated.showEventAuthor = true  // Default to showing author
         }
 
+        // Migration from version 7 to 8: add showEventType
+        if old.schemaVersion < 8 {
+            migrated.showEventType = false  // Default to not showing event type
+        }
+
+        // Migration from version 8 to 9: add showEventBranch
+        if old.schemaVersion < 9 {
+            migrated.showEventBranch = true  // Default to showing branch info
+        }
+
         migrated.schemaVersion = UserPreferences.currentSchemaVersion
         return migrated
     }
@@ -353,6 +373,24 @@ public final class PreferencesManager {
         get { preferences.showEventAuthor }
         set {
             preferences.showEventAuthor = newValue
+            save()
+        }
+    }
+
+    /// Show raw event type preference (for debugging)
+    public var showEventType: Bool {
+        get { preferences.showEventType }
+        set {
+            preferences.showEventType = newValue
+            save()
+        }
+    }
+
+    /// Show branch info preference (commit branch, MR source/target)
+    public var showEventBranch: Bool {
+        get { preferences.showEventBranch }
+        set {
+            preferences.showEventBranch = newValue
             save()
         }
     }

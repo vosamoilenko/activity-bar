@@ -8,6 +8,8 @@ struct CommitActivityView: View {
     let activity: UnifiedActivity
     @Environment(\.menuItemHighlighted) private var isHighlighted
     @Environment(\.showEventAuthor) private var showEventAuthor
+    @Environment(\.showEventType) private var showEventType
+    @Environment(\.showEventBranch) private var showEventBranch
 
     var body: some View {
         RecentItemRowView(alignment: .top, onOpen: self.onOpen) {
@@ -32,7 +34,16 @@ struct CommitActivityView: View {
                         .lineLimit(1)
                 }
 
-                // Metadata row: SHA, repo, time
+                // Event type line (when showEventType is enabled)
+                if showEventType, let eventType = activity.rawEventType {
+                    Text("[\(eventType)]")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(MenuHighlightStyle.tertiary(isHighlighted))
+                        .lineLimit(1)
+                }
+
+                // Metadata row: SHA, branch, repo, time
                 HStack(spacing: 6) {
                     // Short SHA (7 chars, monospaced)
                     Text(shortSHA)
@@ -40,6 +51,14 @@ struct CommitActivityView: View {
                         .monospaced()
                         .foregroundStyle(MenuHighlightStyle.secondary(isHighlighted))
                         .lineLimit(1)
+
+                    // Branch name (from sourceRef)
+                    if showEventBranch, let branch = activity.sourceRef, !branch.isEmpty {
+                        Text(branch)
+                            .font(.caption2)
+                            .foregroundStyle(MenuHighlightStyle.secondary(isHighlighted))
+                            .lineLimit(1)
+                    }
 
                     // Repo name (from summary or title)
                     if let repo = repoName, !repo.isEmpty {

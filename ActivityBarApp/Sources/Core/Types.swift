@@ -100,6 +100,9 @@ public struct UnifiedActivity: Codable, Sendable, Identifiable {
     // Linked ticket/work item references
     public let linkedTickets: [LinkedTicket]?
 
+    // Raw event type from provider (for debugging, e.g., "pushed to", "merged", "created")
+    public let rawEventType: String?
+
     public init(
         id: String,
         provider: Provider,
@@ -123,7 +126,8 @@ public struct UnifiedActivity: Codable, Sendable, Identifiable {
         isAllDay: Bool? = nil,
         attendees: [Participant]? = nil,
         calendarId: String? = nil,
-        linkedTickets: [LinkedTicket]? = nil
+        linkedTickets: [LinkedTicket]? = nil,
+        rawEventType: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -148,6 +152,7 @@ public struct UnifiedActivity: Codable, Sendable, Identifiable {
         self.attendees = attendees
         self.calendarId = calendarId
         self.linkedTickets = linkedTickets
+        self.rawEventType = rawEventType
     }
 
     // Backward-compatible initializer (pre-ACTIVITY-056)
@@ -186,7 +191,8 @@ public struct UnifiedActivity: Codable, Sendable, Identifiable {
             isAllDay: nil,
             attendees: nil,
             calendarId: nil,
-            linkedTickets: nil
+            linkedTickets: nil,
+            rawEventType: nil
         )
     }
 }

@@ -20,6 +20,7 @@ struct ActivityRowView: View {
 
     @Environment(\.menuItemHighlighted) private var isHighlighted
     @Environment(\.showEventAuthor) private var showEventAuthor
+    @Environment(\.showEventType) private var showEventType
 
     var body: some View {
         RecentItemRowView(onOpen: openActivityURL) {
@@ -43,6 +44,15 @@ struct ActivityRowView: View {
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundStyle(MenuHighlightStyle.secondary(isHighlighted))
+                        .lineLimit(1)
+                }
+
+                // Event type line (when showEventType is enabled)
+                if showEventType, let eventType = activity.rawEventType {
+                    Text("[\(eventType)]")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(MenuHighlightStyle.tertiary(isHighlighted))
                         .lineLimit(1)
                 }
 

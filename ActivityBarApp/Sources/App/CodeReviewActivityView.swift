@@ -15,6 +15,8 @@ struct CodeReviewActivityView: View {
     let activity: UnifiedActivity
     @Environment(\.menuItemHighlighted) private var isHighlighted
     @Environment(\.showEventAuthor) private var showEventAuthor
+    @Environment(\.showEventType) private var showEventType
+    @Environment(\.showEventBranch) private var showEventBranch
 
     var body: some View {
         RecentItemRowView(alignment: .top, onOpen: openActivity) {
@@ -36,6 +38,15 @@ struct CodeReviewActivityView: View {
                         .lineLimit(1)
                 }
 
+                // Event type line (when showEventType is enabled)
+                if showEventType, let eventType = activity.rawEventType {
+                    Text("[\(eventType)]")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(MenuHighlightStyle.tertiary(isHighlighted))
+                        .lineLimit(1)
+                }
+
                 // Metadata row: time, state badge
                 HStack(spacing: 6) {
                     Text(RelativeTimeFormatter.string(from: activity.timestamp))
@@ -49,6 +60,16 @@ struct CodeReviewActivityView: View {
                     if let state = reviewState, state != .commented {
                         ReviewStateBadge(state: state, isHighlighted: isHighlighted)
                     }
+                }
+
+                // Branch info: head → base
+                if showEventBranch, let sourceRef = activity.sourceRef, let targetRef = activity.targetRef,
+                   !sourceRef.isEmpty, !targetRef.isEmpty {
+                    Text("\(sourceRef) → \(targetRef)")
+                        .font(.caption2)
+                        .monospaced()
+                        .foregroundStyle(MenuHighlightStyle.secondary(isHighlighted))
+                        .lineLimit(1)
                 }
 
                 // Summary/comment snippet if available

@@ -328,6 +328,21 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         return nil
     }
 
+    // MARK: - Merge Commit Parsing
+
+    /// Extract source branch name from a merge commit title
+    /// Matches patterns like: "Merge branch 'fix/PP-283-fe' into 'sandbox'"
+    private static func extractSourceBranchFromMergeTitle(_ title: String) -> String? {
+        // Pattern: Merge branch 'source-branch' into 'target-branch'
+        let pattern = #"Merge branch '([^']+)' into"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: title, options: [], range: NSRange(title.startIndex..., in: title)),
+              let branchRange = Range(match.range(at: 1), in: title) else {
+            return nil
+        }
+        return String(title[branchRange])
+    }
+
     // MARK: - Event Normalization
 
     /// Normalize a GitLab event to UnifiedActivity
@@ -352,6 +367,7 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         var reviewers: [Participant]?
         var linkedTickets: [LinkedTicket]?
         var mrSourceBranch: String?
+        var mrTargetBranch: String?
         var mrDescription: String?
 
         if event.targetType == "MergeRequest", let projectId = event.projectId, let mrIid = event.targetIid {
@@ -359,6 +375,7 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             if let mr = mrDetailsMap[mrKey] {
                 // Store MR details for ticket extraction
                 mrSourceBranch = mr.sourceBranch
+                mrTargetBranch = mr.targetBranch
                 mrDescription = mr.description
 
                 // Combine reviewers and assignees, avoiding duplicates
@@ -425,6 +442,7 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
         let title: String
         let summary: String?
         var sourceRef: String?
+        var targetRef: String?
         var commitSHA: String?
 
         if (event.actionName == "pushed to" || event.actionName == "pushed new"), let pushData = event.pushData {
@@ -440,7 +458,16 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             commitSHA = pushData.commitTo  // Actual commit SHA
 
             // Extract tickets from branch name for commits
-            let commitTickets = TicketExtractor.extract(from: pushData.ref, source: .branchName, defaultSystem: .gitlabIssue)
+            var commitTickets = TicketExtractor.extract(from: pushData.ref, source: .branchName, defaultSystem: .gitlabIssue)
+
+            // For merge commits, extract tickets from the source branch in the commit title
+            // Pattern: "Merge branch 'source-branch' into 'target-branch'"
+            if commitTickets.isEmpty, let commitTitle = pushData.commitTitle {
+                if let sourceBranch = Self.extractSourceBranchFromMergeTitle(commitTitle) {
+                    commitTickets = TicketExtractor.extract(from: sourceBranch, source: .branchName, defaultSystem: .gitlabIssue)
+                }
+            }
+
             if !commitTickets.isEmpty {
                 linkedTickets = commitTickets
             }
@@ -448,9 +475,58 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             let noteableId = note.noteableIid ?? note.noteableId
             title = "Comment on \(note.noteableType) #\(noteableId)"
             summary = note.body.map { String($0.prefix(200)) }
+
+            // If comment is on an MR, inherit the MR's linked tickets
+            if note.noteableType == "MergeRequest", let projectId = event.projectId {
+                let mrKey = "\(projectId):\(noteableId)"
+                if mrDetailsMap[mrKey] != nil {
+                    // Reuse the linked tickets that were already extracted for this MR above
+                    // (linkedTickets variable is already set if this event is an MR event)
+                    // For comments on MRs, we need to extract tickets separately
+
+                    // Build linked tickets from API-linked issues
+                    var apiLinkedTickets: [LinkedTicket] = []
+                    if let relatedIssues = relatedIssuesMap[mrKey] {
+                        for issue in relatedIssues {
+                            apiLinkedTickets.append(LinkedTicket(
+                                system: .gitlabIssue,
+                                key: "#\(issue.iid)",
+                                title: issue.title,
+                                url: URL(string: issue.webUrl),
+                                source: .apiLink
+                            ))
+                        }
+                    }
+
+                    // Extract tickets from MR details
+                    if let mr = mrDetailsMap[mrKey] {
+                        let extractedTickets = TicketExtractor.extractFromActivity(
+                            branchName: mr.sourceBranch,
+                            title: event.targetTitle,
+                            description: mr.description,
+                            defaultSystem: .gitlabIssue
+                        )
+
+                        let mergedTickets = TicketExtractor.merge(extracted: extractedTickets, apiLinked: apiLinkedTickets)
+                        if !mergedTickets.isEmpty {
+                            linkedTickets = mergedTickets
+                        }
+                    } else if !apiLinkedTickets.isEmpty {
+                        linkedTickets = apiLinkedTickets
+                    }
+                }
+            }
         } else {
             title = event.targetTitle ?? "\(event.actionName) \(event.targetType ?? "item")"
             summary = nil
+        }
+
+        // For MR events (including approvals), attach source/target branches when available
+        if sourceRef == nil, let mrSourceBranch = mrSourceBranch, !mrSourceBranch.isEmpty {
+            sourceRef = mrSourceBranch
+        }
+        if targetRef == nil, let mrTargetBranch = mrTargetBranch, !mrTargetBranch.isEmpty {
+            targetRef = mrTargetBranch
         }
 
         // Parse timestamp
@@ -461,6 +537,14 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
 
         // Get author avatar URL from the map
         let authorAvatarURL = authorAvatarMap[event.authorId]
+
+        // Build raw event type string for debugging
+        let rawEventType: String
+        if let targetType = event.targetType {
+            rawEventType = "\(event.actionName):\(targetType)"
+        } else {
+            rawEventType = event.actionName
+        }
 
         return UnifiedActivity(
             id: "gitlab:\(accountId):event-\(event.id)",
@@ -475,9 +559,11 @@ public final class GitLabProviderAdapter: ProviderAdapter, Sendable {
             url: url,
             authorAvatarURL: authorAvatarURL,
             sourceRef: sourceRef,
+            targetRef: targetRef,
             projectName: projectName,
             reviewers: reviewers,
-            linkedTickets: linkedTickets
+            linkedTickets: linkedTickets,
+            rawEventType: rawEventType
         )
     }
 }

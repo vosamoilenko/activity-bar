@@ -87,17 +87,22 @@ You can add multiple accounts from the same or different providers.
 
 ### Provider-Specific Configuration
 
-#### GitLab
+#### GitLab (OAuth only)
+- Uses OAuth 2.0 authentication via browser
 - Supports both gitlab.com and self-hosted instances
 - Specify custom host URL for self-hosted GitLab
+- **Setup**: Register OAuth app on your GitLab instance with redirect URI: `http://127.0.0.1:8765/callback`
 
-#### Azure DevOps
-- Configure organization URL
-- Optionally filter to specific projects
+#### Azure DevOps (Personal Access Token only)
+- Uses Personal Access Token (PAT) authentication
+- Configure organization name and project(s)
+- **Setup**: Generate PAT at Azure DevOps → User Settings → Personal access tokens
 
-#### Google Calendar
+#### Google Calendar (OAuth only)
+- Uses OAuth 2.0 authentication via browser
 - Select which calendars to monitor
 - Option to show only events where you're an attendee
+- **Setup**: Register OAuth app at Google Cloud Console with redirect URI: `http://127.0.0.1:8765/callback`
 
 ## Architecture
 
@@ -199,6 +204,38 @@ swift run ActivityBarApp
 
 **Note**: No Xcode required - Swift Package Manager handles everything from the command line.
 
+#### Local Development Setup
+
+For local development, use environment variables to configure authentication:
+
+**Required for OAuth providers (GitLab, Google Calendar):**
+- OAuth client ID and secret (register apps at provider's settings)
+
+**Optional prefill values:**
+- GitLab: `ACTIVITYBAR_DEFAULT_GITLAB_HOST` (for self-hosted instances)
+- Azure DevOps: `ACTIVITYBAR_AZURE_PAT`, `ACTIVITYBAR_AZURE_ORGANISATION`, `ACTIVITYBAR_AZURE_PROJECTS`
+
+```bash
+# 1. Copy and edit the env file with your credentials
+cp .env.example .env.local
+# Edit .env.local with your OAuth app credentials
+
+# 2. Run the app with environment variables loaded
+./run-dev.sh
+
+# Or manually:
+source .env.local && cd ActivityBarApp && swift run ActivityBarApp
+```
+
+**In Xcode**: Product → Scheme → Edit Scheme → Run → Arguments → Environment Variables (add all variables from `.env.local`)
+
+**Provider Authentication Methods:**
+- **GitLab**: OAuth only (requires `ACTIVITYBAR_GITLAB_CLIENT_ID` and `ACTIVITYBAR_GITLAB_CLIENT_SECRET`)
+- **Azure DevOps**: PAT only (optional prefill via `ACTIVITYBAR_AZURE_PAT`)
+- **Google Calendar**: OAuth only (requires `ACTIVITYBAR_GOOGLE_CLIENT_ID` and `ACTIVITYBAR_GOOGLE_CLIENT_SECRET`)
+
+**Important**: Never commit `.env.local` with real credentials! It's gitignored by default.
+
 ### Testing
 
 ```bash
@@ -208,13 +245,13 @@ swift test
 swift test --filter CoreTests
 ```
 
-For OAuth testing, create a `.env` file with your client credentials (see `.env.example`).
+For OAuth testing, set OAuth client credentials in environment variables (see `.env.example`).
 
 ### TL;DR
 
 Build, sign, and run (one command):
 ```bash
-cd ActivityBarApp && swift build -c release && codesign -s - -f .build/release/ActivityBarApp && .build/release/ActivityBarApp
+swift build -c release && codesign -s - -f .build/release/ActivityBarApp && .build/release/ActivityBarApp
 ```
 
 See [Development Guide](docs/development.md) for more details.
