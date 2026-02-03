@@ -182,6 +182,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preferencesManager: preferencesManager,
             onPanelAppearanceChanged: { [weak self] in
                 self?.updatePanelAppearance()
+            },
+            onClearCache: { [weak self] accountId in
+                await self?.clearCacheForAccount(accountId)
             }
         )
     }

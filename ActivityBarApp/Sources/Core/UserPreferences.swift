@@ -52,7 +52,7 @@ public enum PanelBlurMaterial: String, CaseIterable, Sendable, Codable {
         case .headerView: return "Header"
         case .sheet: return "Sheet"
         case .windowBackground: return "Window Background"
-        case .hudWindow: return "HUD Window (Default)"
+        case .hudWindow: return "HUD Window"
         case .fullScreenUI: return "Full Screen UI"
         case .underWindowBackground: return "Under Window"
         }
@@ -181,10 +181,10 @@ public struct UserPreferences: Codable, Sendable, Equatable {
         showEventAuthor: Bool = true,
         showEventType: Bool = false,
         showEventBranch: Bool = true,
-        weekStartDay: WeekStartDay = .sunday,
+        weekStartDay: WeekStartDay = .monday,
         refreshInterval: RefreshInterval = .fifteenMinutes,
         panelBlurMaterial: PanelBlurMaterial = .hudWindow,
-        panelTransparency: Double = 0.95
+        panelTransparency: Double = 1.0
     ) {
         self.schemaVersion = schemaVersion
         self.heatmapRange = heatmapRange

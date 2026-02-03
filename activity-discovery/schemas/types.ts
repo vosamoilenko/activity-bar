@@ -40,6 +40,12 @@ export interface UnifiedActivity {
   participants?: string[];
   /** Deep link URL to the source (optional) */
   url?: string;
+  /** Source branch/ref name (optional) */
+  sourceRef?: string;
+  /** Target branch/ref name (optional) */
+  targetRef?: string;
+  /** Raw event type from provider (optional) */
+  rawEventType?: string;
 }
 
 /**

@@ -5,6 +5,7 @@
 
 # Credentials folder (contains API keys and tokens)
 credentials/
+activity-discovery/config.json
 
 # macOS
 .DS_Store

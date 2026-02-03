@@ -21,7 +21,8 @@ final class SettingsWindowController: NSWindowController {
         launchAtLoginManager: LaunchAtLoginManager,
         refreshScheduler: RefreshScheduler?,
         preferencesManager: PreferencesManager,
-        onPanelAppearanceChanged: (() -> Void)? = nil
+        onPanelAppearanceChanged: (() -> Void)? = nil,
+        onClearCache: ((String) async -> Void)? = nil
     ) {
         print("[ActivityBar] SettingsWindowController.show called")
 
@@ -32,7 +33,8 @@ final class SettingsWindowController: NSWindowController {
             launchAtLoginManager: launchAtLoginManager,
             refreshScheduler: refreshScheduler,
             preferencesManager: preferencesManager,
-            onPanelAppearanceChanged: onPanelAppearanceChanged
+            onPanelAppearanceChanged: onPanelAppearanceChanged,
+            onClearCache: onClearCache
         )
 
         let hosting = NSHostingController(rootView: rootView)
